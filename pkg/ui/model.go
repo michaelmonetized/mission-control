@@ -930,15 +930,15 @@ func (m Model) renderProjectRow(p Project, idx int, width int, isOdd bool, isSel
 	}
 
 	// Apply ANSI background color directly (bypassing lipgloss to avoid icon issues)
-	// Colors: 234 (even/dark), 238 (odd/lighter), 6 (cyan/selected)
+	// Subtle striping: 235 (even) vs 236 (odd) - just 1 step difference
 	var bgColor string
 	if isSelected {
 		bgColor = "6" // cyan
 		return fmt.Sprintf("\033[30;48;5;%sm%s\033[0m", bgColor, fullRow) // black fg for selected
 	} else if isOdd {
-		bgColor = "238"
+		bgColor = "236" // slightly lighter
 	} else {
-		bgColor = "234"
+		bgColor = "235" // slightly darker
 	}
 	
 	return fmt.Sprintf("\033[48;5;%sm%s\033[0m", bgColor, fullRow)

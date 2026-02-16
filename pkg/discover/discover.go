@@ -425,13 +425,23 @@ func GetGitTimes(projectPath string) (firstCommit, lastCommit time.Time) {
 	}
 
 	// Get first commit time (oldest) - only if not cached
+	// Use rev-list --max-parents=0 to find the root commit(s)
 	if firstCommit.IsZero() {
-		cmd := exec.Command("git", "-C", expandedPath, "log", "--reverse", "--format=%ct", "-1")
+		// Get root commit hash first
+		cmd := exec.Command("git", "-C", expandedPath, "rev-list", "--max-parents=0", "HEAD")
 		output, err := cmd.Output()
 		if err == nil {
-			var ts int64
-			if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%d", &ts); err == nil {
-				firstCommit = time.Unix(ts, 0)
+			rootHash := strings.TrimSpace(strings.Split(string(output), "\n")[0])
+			if rootHash != "" {
+				// Get timestamp of root commit
+				cmd = exec.Command("git", "-C", expandedPath, "log", "--format=%ct", "-1", rootHash)
+				output, err = cmd.Output()
+				if err == nil {
+					var ts int64
+					if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%d", &ts); err == nil {
+						firstCommit = time.Unix(ts, 0)
+					}
+				}
 			}
 		}
 	}
