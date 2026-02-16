@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# mc-caddy - Caddy configuration for Mission Control
+# Usage: mc-caddy <command> [args]
+# Commands: add, remove, list, reload, status
+
+set -euo pipefail
+
+CADDY_DIR="$HOME/.hustlemc/caddy"
+CADDYFILE="$CADDY_DIR/Caddyfile"
+PORTS_FILE="$CADDY_DIR/ports.json"
+
+mkdir -p "$CADDY_DIR"
+[[ -f "$PORTS_FILE" ]] || echo '{}' > "$PORTS_FILE"
+
+cmd="${1:-help}"
+shift || true
+
+# Get next available port starting from 3001
+next_port() {
+  local ports=$(cat "$PORTS_FILE")
+  local port=3001
+  while echo "$ports" | jq -e --arg p "$port" 'to_entries | map(.value) | index($p | tonumber)' >/dev/null 2>&1; do
+    ((port++))
+  done
+  echo "$port"
+}
+
+generate_caddyfile() {
+  cat > "$CADDYFILE" <<EOF
+# Mission Control Caddyfile
+# Auto-generated - do not edit manually
+
+{
+  admin off
+  auto_https off
+}
+
+EOF
+
+  local ports=$(cat "$PORTS_FILE")
+  for name in $(echo "$ports" | jq -r 'keys[]'); do
+    local port=$(echo "$ports" | jq -r --arg n "$name" '.[$n]')
+    cat >> "$CADDYFILE" <<EOF
+$name.localhost {
+  reverse_proxy localhost:$port
+}
+
+EOF
+  done
+}
+
+case "$cmd" in
+  add)
+    name="${1:-}"
+    port="${2:-$(next_port)}"
+    [[ -z "$name" ]] && { echo "Usage: mc-caddy add <project-name> [port]" >&2; exit 1; }
+    
+    # Add to ports file
+    ports=$(cat "$PORTS_FILE")
+    ports=$(echo "$ports" | jq --arg n "$name" --arg p "$port" '. + {($n): ($p | tonumber)}')
+    echo "$ports" > "$PORTS_FILE"
+    
+    generate_caddyfile
+    echo "Added: $name.localhost → localhost:$port"
+    ;;
+    
+  remove)
+    name="${1:-}"
+    [[ -z "$name" ]] && { echo "Usage: mc-caddy remove <project-name>" >&2; exit 1; }
+    
+    ports=$(cat "$PORTS_FILE")
+    ports=$(echo "$ports" | jq --arg n "$name" 'del(.[$n])')
+    echo "$ports" > "$PORTS_FILE"
+    
+    generate_caddyfile
+    echo "Removed: $name"
+    ;;
+    
+  list)
+    echo "Mission Control Dev Hosts:"
+    echo "---"
+    cat "$PORTS_FILE" | jq -r 'to_entries | .[] | "\(.key).localhost → localhost:\(.value)"'
+    ;;
+    
+  port)
+    name="${1:-}"
+    [[ -z "$name" ]] && { echo "Usage: mc-caddy port <project-name>" >&2; exit 1; }
+    cat "$PORTS_FILE" | jq -r --arg n "$name" '.[$n] // empty'
+    ;;
+    
+  reload)
+    if pgrep -x caddy >/dev/null; then
+      caddy reload --config "$CADDYFILE" 2>/dev/null && echo "Caddy reloaded" || echo "Reload failed"
+    else
+      echo "Caddy not running. Start with: mc-caddy start"
+    fi
+    ;;
+    
+  start)
+    generate_caddyfile
+    if pgrep -x caddy >/dev/null; then
+      echo "Caddy already running"
+    else
+      caddy start --config "$CADDYFILE" && echo "Caddy started"
+    fi
+    ;;
+    
+  stop)
+    caddy stop 2>/dev/null && echo "Caddy stopped" || echo "Caddy not running"
+    ;;
+    
+  status)
+    if pgrep -x caddy >/dev/null; then
+      echo "Caddy: running"
+      echo "Config: $CADDYFILE"
+      echo "Hosts: $(cat "$PORTS_FILE" | jq 'length')"
+    else
+      echo "Caddy: stopped"
+    fi
+    ;;
+    
+  help|*)
+    cat <<EOF
+mc-caddy - Caddy configuration for Mission Control
+
+Commands:
+  add <name> [port]  Add dev host (name.localhost → localhost:port)
+  remove <name>      Remove dev host
+  list               List all dev hosts
+  port <name>        Get port for project
+  reload             Reload Caddy config
+  start              Start Caddy daemon
+  stop               Stop Caddy daemon
+  status             Show Caddy status
+EOF
+    ;;
+esac

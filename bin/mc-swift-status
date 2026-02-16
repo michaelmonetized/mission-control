@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# mc-swift-status - Get Swift build status for a project
+# Usage: mc-swift-status <project_path> [--json]
+# Output: JSON object with build state
+
+set -euo pipefail
+
+PROJECT_PATH="${1:-.}"
+OUTPUT_JSON=false
+[[ "${2:-}" == "--json" ]] && OUTPUT_JSON=true
+
+cd "$PROJECT_PATH" 2>/dev/null || { echo '{"error":"invalid path"}'; exit 1; }
+
+# Check if Swift project
+if [[ ! -f "Package.swift" ]] && ! ls *.xcodeproj &>/dev/null 2>&1; then
+  [[ "$OUTPUT_JSON" == true ]] && echo '{"error":"not a swift project"}' || echo "none"
+  exit 0
+fi
+
+# Check for build artifacts
+build_dir=".build"
+state="unknown"
+last_build=""
+
+if [[ -d "$build_dir" ]]; then
+  # Check if last build succeeded
+  if [[ -f "$build_dir/debug/.build-manifest.json" ]] || [[ -d "$build_dir/debug" ]]; then
+    state="success"
+  fi
+  # Get last build time
+  if [[ -d "$build_dir" ]]; then
+    last_build=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$build_dir" 2>/dev/null || echo "")
+  fi
+else
+  state="none"
+fi
+
+# Check for build errors in recent xcodebuild output (if cached)
+error_log="$HOME/.hustlemc/swift-errors/$(basename "$PROJECT_PATH").log"
+if [[ -f "$error_log" ]]; then
+  if grep -q "error:" "$error_log" 2>/dev/null; then
+    state="failed"
+  fi
+fi
+
+if [[ "$OUTPUT_JSON" == true ]]; then
+  cat <<EOF
+{
+  "state": "$state",
+  "last_build": "$last_build"
+}
+EOF
+else
+  echo -e "$state\t$last_build"
+fi

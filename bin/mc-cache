@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# mc-cache - Cache management for Mission Control
+# Usage: mc-cache <command> [args]
+# Commands: get, set, clear, refresh, stats
+
+set -euo pipefail
+
+CACHE_DIR="$HOME/.hustlemc"
+PROJECTS_CACHE="$CACHE_DIR/projects.json"
+STATUS_CACHE="$CACHE_DIR/status.json"
+CONFIG_FILE="$CACHE_DIR/config.json"
+
+mkdir -p "$CACHE_DIR"
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  get)
+    key="${1:-projects}"
+    case "$key" in
+      projects) cat "$PROJECTS_CACHE" 2>/dev/null || echo "[]" ;;
+      status) cat "$STATUS_CACHE" 2>/dev/null || echo "{}" ;;
+      config) cat "$CONFIG_FILE" 2>/dev/null || echo '{"root":"~/Projects"}' ;;
+      *) echo "Unknown key: $key" >&2; exit 1 ;;
+    esac
+    ;;
+    
+  set)
+    key="${1:-}"
+    value="${2:-}"
+    [[ -z "$key" ]] && { echo "Usage: mc-cache set <key> <value>" >&2; exit 1; }
+    case "$key" in
+      projects) echo "$value" > "$PROJECTS_CACHE" ;;
+      status) echo "$value" > "$STATUS_CACHE" ;;
+      config) echo "$value" > "$CONFIG_FILE" ;;
+      *) echo "Unknown key: $key" >&2; exit 1 ;;
+    esac
+    ;;
+    
+  clear)
+    target="${1:-all}"
+    case "$target" in
+      projects) rm -f "$PROJECTS_CACHE" ;;
+      status) rm -f "$STATUS_CACHE" ;;
+      all) rm -f "$PROJECTS_CACHE" "$STATUS_CACHE" ;;
+      *) echo "Unknown target: $target" >&2; exit 1 ;;
+    esac
+    echo "Cache cleared: $target"
+    ;;
+    
+  refresh)
+    # Refresh all caches
+    echo "Refreshing project list..."
+    mc-discover --json > "$PROJECTS_CACHE"
+    
+    echo "Refreshing status cache..."
+    projects=$(cat "$PROJECTS_CACHE")
+    status="{}"
+    
+    for row in $(echo "$projects" | jq -r '.[] | @base64'); do
+      _jq() { echo "$row" | base64 --decode | jq -r "$1"; }
+      path=$(_jq '.path')
+      name=$(_jq '.name')
+      type=$(_jq '.type')
+      
+      echo "  $name..."
+      
+      git_status=$(mc-git-status "$path" --json 2>/dev/null || echo '{}')
+      gh_status=$(mc-gh-status "$path" --json 2>/dev/null || echo '{}')
+      
+      case "$type" in
+        vercel) deploy_status=$(mc-vl-status "$path" --json 2>/dev/null || echo '{}') ;;
+        swift) deploy_status=$(mc-swift-status "$path" --json 2>/dev/null || echo '{}') ;;
+        *) deploy_status='{}' ;;
+      esac
+      
+      status=$(echo "$status" | jq --arg name "$name" \
+        --argjson git "$git_status" \
+        --argjson gh "$gh_status" \
+        --argjson deploy "$deploy_status" \
+        '. + {($name): {"git": $git, "gh": $gh, "deploy": $deploy, "updated": now}}')
+    done
+    
+    echo "$status" > "$STATUS_CACHE"
+    echo "Done!"
+    ;;
+    
+  stats)
+    echo "Cache Directory: $CACHE_DIR"
+    echo "---"
+    [[ -f "$PROJECTS_CACHE" ]] && echo "Projects: $(jq 'length' "$PROJECTS_CACHE") cached" || echo "Projects: not cached"
+    [[ -f "$STATUS_CACHE" ]] && echo "Status: $(jq 'keys | length' "$STATUS_CACHE") entries" || echo "Status: not cached"
+    [[ -f "$CONFIG_FILE" ]] && echo "Config: exists" || echo "Config: not set"
+    echo "---"
+    du -sh "$CACHE_DIR" 2>/dev/null || echo "Size: unknown"
+    ;;
+    
+  help|*)
+    cat <<EOF
+mc-cache - Cache management for Mission Control
+
+Commands:
+  get <key>       Get cached value (projects|status|config)
+  set <key> <val> Set cached value
+  clear [target]  Clear cache (projects|status|all)
+  refresh         Refresh all caches
+  stats           Show cache statistics
+EOF
+    ;;
+esac

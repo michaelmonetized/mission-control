@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# mc-git-status - Get git status for a project
+# Usage: mc-git-status <project_path> [--json]
+# Output: JSON object with counts or tab-separated values
+
+set -euo pipefail
+
+PROJECT_PATH="${1:-.}"
+OUTPUT_JSON=false
+[[ "${2:-}" == "--json" ]] && OUTPUT_JSON=true
+
+cd "$PROJECT_PATH" 2>/dev/null || { echo '{"error":"invalid path"}'; exit 1; }
+
+# Check if git repo
+if [[ ! -d ".git" ]]; then
+  if [[ "$OUTPUT_JSON" == true ]]; then
+    echo '{"error":"not a git repo"}'
+  else
+    echo "0	0	0"
+  fi
+  exit 0
+fi
+
+# Get status counts
+untracked=$(git status --porcelain 2>/dev/null | grep -c "^??" 2>/dev/null || true)
+untracked=${untracked:-0}
+modified=$(git status --porcelain 2>/dev/null | grep -c "^.M\|^M.\|^A.\|^D." 2>/dev/null || true)
+modified=${modified:-0}
+total_files=$(git ls-files 2>/dev/null | wc -l | tr -d ' ')
+commits_ahead=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo 0)
+branch=$(git branch --show-current 2>/dev/null || echo "detached")
+
+if [[ "$OUTPUT_JSON" == true ]]; then
+  cat <<EOF
+{
+  "untracked": $untracked,
+  "modified": $modified,
+  "total_files": $total_files,
+  "commits_ahead": $commits_ahead,
+  "branch": "$branch"
+}
+EOF
+else
+  echo -e "$untracked\t$modified\t$total_files\t$commits_ahead\t$branch"
+fi

@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# mc-stats - Aggregate stats for Mission Control status lines
+# Usage: mc-stats [--json]
+# Output: Aggregated counts for all projects
+
+set -euo pipefail
+
+OUTPUT_JSON=false
+[[ "${1:-}" == "--json" ]] && OUTPUT_JSON=true
+
+CACHE_DIR="$HOME/.hustlemc"
+PROJECTS_CACHE="$CACHE_DIR/projects.json"
+STATUS_CACHE="$CACHE_DIR/status.json"
+
+# Ensure cache exists
+if [[ ! -f "$PROJECTS_CACHE" ]]; then
+  mc-discover --json > "$PROJECTS_CACHE"
+fi
+
+projects=$(cat "$PROJECTS_CACHE")
+
+# Initialize counters
+total_projects=$(echo "$projects" | jq 'length')
+vercel_ready=0
+vercel_building=0
+vercel_queued=0
+vercel_failed=0
+swift_success=0
+swift_failed=0
+total_files=0
+total_untracked=0
+total_modified=0
+total_issues=0
+total_prs=0
+
+# Process each project
+for row in $(echo "$projects" | jq -r '.[] | @base64'); do
+  _jq() { echo "$row" | base64 --decode | jq -r "$1"; }
+  path=$(_jq '.path')
+  name=$(_jq '.name')
+  type=$(_jq '.type')
+  
+  # Git stats (fast, local)
+  if [[ -d "$path/.git" ]]; then
+    cd "$path"
+    untracked=$(git status --porcelain 2>/dev/null | grep -c "^??" || echo 0)
+    modified=$(git status --porcelain 2>/dev/null | grep -c "^.M\|^M.\|^A.\|^D." || echo 0)
+    files=$(git ls-files 2>/dev/null | wc -l | tr -d ' ')
+    
+    total_files=$((total_files + files))
+    total_untracked=$((total_untracked + untracked))
+    total_modified=$((total_modified + modified))
+  fi
+  
+  # Check cached status for deploy/gh info (slower, use cache)
+  if [[ -f "$STATUS_CACHE" ]]; then
+    cached=$(cat "$STATUS_CACHE" | jq --arg n "$name" '.[$n] // empty')
+    if [[ -n "$cached" ]]; then
+      issues=$(echo "$cached" | jq -r '.gh.issues // 0')
+      prs=$(echo "$cached" | jq -r '.gh.prs // 0')
+      total_issues=$((total_issues + issues))
+      total_prs=$((total_prs + prs))
+      
+      if [[ "$type" == "vercel" ]]; then
+        state=$(echo "$cached" | jq -r '.deploy.state // "unknown"')
+        case "$state" in
+          ready) vercel_ready=$((vercel_ready + 1)) ;;
+          building) vercel_building=$((vercel_building + 1)) ;;
+          queued) vercel_queued=$((vercel_queued + 1)) ;;
+          failed|error) vercel_failed=$((vercel_failed + 1)) ;;
+        esac
+      elif [[ "$type" == "swift" ]]; then
+        state=$(echo "$cached" | jq -r '.deploy.state // "unknown"')
+        case "$state" in
+          success) swift_success=$((swift_success + 1)) ;;
+          failed) swift_failed=$((swift_failed + 1)) ;;
+        esac
+      fi
+    fi
+  fi
+done
+
+if [[ "$OUTPUT_JSON" == true ]]; then
+  cat <<EOF
+{
+  "projects": $total_projects,
+  "vercel": {
+    "ready": $vercel_ready,
+    "building": $vercel_building,
+    "queued": $vercel_queued,
+    "failed": $vercel_failed
+  },
+  "swift": {
+    "success": $swift_success,
+    "failed": $swift_failed
+  },
+  "git": {
+    "files": $total_files,
+    "untracked": $total_untracked,
+    "modified": $total_modified
+  },
+  "github": {
+    "issues": $total_issues,
+    "prs": $total_prs
+  }
+}
+EOF
+else
+  # Format for status line
+  echo "󰐎 ${vercel_ready}◬ ${vercel_building}󱫟 ${vercel_queued}⨻ ${vercel_failed}  󰣪 ${swift_success}󰸞 ${swift_failed}✘   ${total_files} ${total_untracked} ${total_modified} ${total_issues} ${total_prs}"
+fi

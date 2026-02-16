@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# mc - Mission Control CLI
+# Usage: mc <command> [args]
+
+set -euo pipefail
+
+# Add bin to PATH for subcommands
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PATH="$SCRIPT_DIR:$PATH"
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  # Discovery & Status
+  discover)   exec mc-discover "$@" ;;
+  stats)      exec mc-stats "$@" ;;
+  
+  # Project Status
+  git)        exec mc-git-status "$@" ;;
+  gh)         exec mc-gh-status "$@" ;;
+  vl)         exec mc-vl-status "$@" ;;
+  swift)      exec mc-swift-status "$@" ;;
+  
+  # Cache Management
+  cache)      exec mc-cache "$@" ;;
+  refresh)    exec mc-cache refresh "$@" ;;
+  
+  # Dev Server
+  dev)        exec mc-dev "$@" ;;
+  start)      exec mc-dev start "$@" ;;
+  stop)       exec mc-dev stop "$@" ;;
+  open)       exec mc-dev open "$@" ;;
+  logs)       exec mc-dev logs "$@" ;;
+  
+  # Caddy
+  caddy)      exec mc-caddy "$@" ;;
+  hosts)      exec mc-caddy list "$@" ;;
+  
+  # TUI (to be implemented)
+  tui|ui)
+    echo "TUI not yet implemented. Use: mc list"
+    ;;
+  
+  # Quick list (no TUI)
+  list|ls)
+    mc-discover | column -t -s $'\t'
+    ;;
+    
+  # Status overview
+  status)
+    echo "🚀 Mission Control"
+    echo "---"
+    mc-stats
+    echo "---"
+    mc-caddy status
+    ;;
+  
+  # Init/Setup
+  init)
+    echo "🚀 Mission Control Setup"
+    echo ""
+    read -p "Project root [~/Projects]: " root
+    root="${root:-$HOME/Projects}"
+    root="${root/#\~/$HOME}"
+    
+    mkdir -p "$HOME/.hustlemc"
+    echo "{\"root\":\"$root\"}" > "$HOME/.hustlemc/config.json"
+    
+    echo "Discovering projects..."
+    mc-discover "$root" --json > "$HOME/.hustlemc/projects.json"
+    
+    count=$(jq 'length' "$HOME/.hustlemc/projects.json")
+    echo "Found $count projects"
+    echo ""
+    echo "Done! Run 'mc list' or 'mc tui'"
+    ;;
+    
+  version|-v|--version)
+    echo "Mission Control v0.1.0"
+    ;;
+  
+  help|-h|--help|*)
+    cat <<EOF
+🚀 Mission Control - Project Manager
+
+Usage: mc <command> [args]
+
+Discovery & Status:
+  discover [root]     Discover projects in directory
+  list, ls            List all projects
+  stats               Aggregate status for all projects
+  status              Quick status overview
+
+Project Info:
+  git <path>          Git status for project
+  gh <path>           GitHub issues/PRs for project
+  vl <path>           Vercel status for project
+  swift <path>        Swift build status for project
+
+Dev Server:
+  start <path>        Start dev server with Caddy
+  stop <path>         Stop dev server
+  open <path>         Open in browser
+  logs <path>         Tail dev server logs
+
+Caddy:
+  caddy <cmd>         Caddy management (add/remove/list/start/stop)
+  hosts               List all dev hosts
+
+Cache:
+  cache <cmd>         Cache management (get/set/clear/stats)
+  refresh             Refresh all caches
+
+Setup:
+  init                First-time setup wizard
+
+Options:
+  --json              Output JSON where supported
+  -v, --version       Show version
+  -h, --help          Show this help
+EOF
+    ;;
+esac

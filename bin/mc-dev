@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# mc-dev - Start/stop dev server for a project with Caddy integration
+# Usage: mc-dev <command> <project_path>
+# Commands: start, stop, status, open
+
+set -euo pipefail
+
+cmd="${1:-help}"
+PROJECT_PATH="${2:-.}"
+
+# Resolve to absolute path
+PROJECT_PATH=$(cd "$PROJECT_PATH" 2>/dev/null && pwd) || { echo "Invalid path: $PROJECT_PATH" >&2; exit 1; }
+PROJECT_NAME=$(basename "$PROJECT_PATH")
+
+PID_DIR="$HOME/.hustlemc/pids"
+LOG_DIR="$HOME/.hustlemc/logs"
+mkdir -p "$PID_DIR" "$LOG_DIR"
+
+PID_FILE="$PID_DIR/$PROJECT_NAME.pid"
+LOG_FILE="$LOG_DIR/$PROJECT_NAME.log"
+
+case "$cmd" in
+  start)
+    # Check if already running
+    if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      echo "Already running: $PROJECT_NAME (PID $(cat "$PID_FILE"))"
+      exit 0
+    fi
+    
+    cd "$PROJECT_PATH"
+    
+    # Detect project type and start appropriate dev server
+    if [[ -f "package.json" ]]; then
+      # Node/Bun project
+      port=$(mc-caddy port "$PROJECT_NAME" 2>/dev/null || true)
+      
+      if [[ -z "$port" ]]; then
+        # Allocate new port
+        mc-caddy add "$PROJECT_NAME"
+        port=$(mc-caddy port "$PROJECT_NAME")
+        mc-caddy reload
+      fi
+      
+      # Start dev server
+      if grep -q '"dev"' package.json; then
+        PORT=$port bun run dev > "$LOG_FILE" 2>&1 &
+      elif grep -q '"start"' package.json; then
+        PORT=$port bun run start > "$LOG_FILE" 2>&1 &
+      else
+        echo "No dev or start script found"
+        exit 1
+      fi
+      
+      echo $! > "$PID_FILE"
+      echo "Started: $PROJECT_NAME on port $port (PID $!)"
+      echo "URL: http://$PROJECT_NAME.localhost"
+      
+    elif [[ -f "Package.swift" ]]; then
+      # Swift project - build and run
+      swift build > "$LOG_FILE" 2>&1 && swift run >> "$LOG_FILE" 2>&1 &
+      echo $! > "$PID_FILE"
+      echo "Started: $PROJECT_NAME (Swift) PID $!"
+      
+    else
+      echo "Unknown project type"
+      exit 1
+    fi
+    ;;
+    
+  stop)
+    if [[ -f "$PID_FILE" ]]; then
+      pid=$(cat "$PID_FILE")
+      if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null
+        rm -f "$PID_FILE"
+        echo "Stopped: $PROJECT_NAME (PID $pid)"
+      else
+        rm -f "$PID_FILE"
+        echo "Process not running (cleaned stale PID)"
+      fi
+    else
+      echo "Not running: $PROJECT_NAME"
+    fi
+    ;;
+    
+  restart)
+    $0 stop "$PROJECT_PATH"
+    sleep 1
+    $0 start "$PROJECT_PATH"
+    ;;
+    
+  status)
+    if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      pid=$(cat "$PID_FILE")
+      port=$(mc-caddy port "$PROJECT_NAME" 2>/dev/null || echo "?")
+      echo "Running: $PROJECT_NAME (PID $pid, port $port)"
+    else
+      echo "Stopped: $PROJECT_NAME"
+    fi
+    ;;
+    
+  open)
+    port=$(mc-caddy port "$PROJECT_NAME" 2>/dev/null || true)
+    if [[ -n "$port" ]]; then
+      open "http://$PROJECT_NAME.localhost"
+    else
+      echo "No dev host configured for $PROJECT_NAME"
+    fi
+    ;;
+    
+  logs)
+    if [[ -f "$LOG_FILE" ]]; then
+      tail -f "$LOG_FILE"
+    else
+      echo "No logs for $PROJECT_NAME"
+    fi
+    ;;
+    
+  help|*)
+    cat <<EOF
+mc-dev - Dev server management for Mission Control
+
+Commands:
+  start <path>   Start dev server with Caddy hostname
+  stop <path>    Stop dev server
+  restart <path> Restart dev server
+  status <path>  Check if running
+  open <path>    Open in browser
+  logs <path>    Tail log file
+EOF
+    ;;
+esac

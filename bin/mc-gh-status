@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# mc-gh-status - Get GitHub issues/PRs for a project
+# Usage: mc-gh-status <project_path> [--json]
+# Output: JSON object with counts
+
+set -euo pipefail
+
+PROJECT_PATH="${1:-.}"
+OUTPUT_JSON=false
+[[ "${2:-}" == "--json" ]] && OUTPUT_JSON=true
+
+cd "$PROJECT_PATH" 2>/dev/null || { echo '{"error":"invalid path"}'; exit 1; }
+
+# Check if gh is available and repo exists
+if ! command -v gh &>/dev/null; then
+  [[ "$OUTPUT_JSON" == true ]] && echo '{"error":"gh not installed"}' || echo "0	0"
+  exit 0
+fi
+
+# Check if connected to a GitHub repo
+if ! gh repo view &>/dev/null 2>&1; then
+  [[ "$OUTPUT_JSON" == true ]] && echo '{"issues":0,"prs":0}' || echo "0	0"
+  exit 0
+fi
+
+# Get counts
+issues=$(gh issue list --state open --limit 100 --json number 2>/dev/null | jq 'length' || echo 0)
+prs=$(gh pr list --state open --limit 100 --json number 2>/dev/null | jq 'length' || echo 0)
+
+if [[ "$OUTPUT_JSON" == true ]]; then
+  cat <<EOF
+{
+  "issues": $issues,
+  "prs": $prs
+}
+EOF
+else
+  echo -e "$issues\t$prs"
+fi

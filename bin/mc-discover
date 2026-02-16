@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# mc-discover - Fast project discovery
+# Usage: mc-discover [root_dir] [--json]
+
+set -euo pipefail
+
+ROOT_DIR="${1:-$HOME/Projects}"
+OUTPUT_JSON=false
+[[ "${2:-}" == "--json" ]] && OUTPUT_JSON=true
+
+CACHE_DIR="$HOME/.hustlemc"
+CACHE_FILE="$CACHE_DIR/projects.json"
+mkdir -p "$CACHE_DIR"
+
+discover_projects() {
+  local root="$1"
+  
+  echo "["
+  local first=true
+  
+  # Only look at immediate subdirectories
+  for dir in "$root"/*/; do
+    [[ ! -d "$dir" ]] && continue
+    local name=$(basename "$dir")
+    
+    # Skip hidden and node_modules
+    [[ "$name" == .* ]] && continue
+    [[ "$name" == "node_modules" ]] && continue
+    
+    local ptype="unknown"
+    
+    # Check project type
+    if [[ -d "$dir/.vercel" ]]; then
+      ptype="vercel"
+    elif [[ -f "$dir/Package.swift" ]]; then
+      ptype="swift"
+    elif ls "$dir"/*.xcodeproj &>/dev/null 2>&1; then
+      ptype="swift"
+    elif [[ -f "$dir/package.json" ]] && jq -e '.bin' "$dir/package.json" &>/dev/null; then
+      ptype="cli"
+    elif [[ -f "$dir/go.mod" ]]; then
+      ptype="cli"
+    elif [[ -f "$dir/Cargo.toml" ]]; then
+      ptype="cli"
+    elif [[ -d "$dir/.git" ]]; then
+      ptype="git"
+    else
+      continue
+    fi
+    
+    [[ "$first" == true ]] && first=false || echo ","
+    echo "  {\"name\":\"$name\",\"path\":\"${dir%/}\",\"type\":\"$ptype\"}"
+  done
+  
+  echo "]"
+}
+
+# Run discovery and cache
+result=$(discover_projects "$ROOT_DIR")
+echo "$result" > "$CACHE_FILE"
+
+if [[ "$OUTPUT_JSON" == true ]]; then
+  echo "$result"
+else
+  echo "$result" | jq -r '.[] | "\(.type)\t\(.name)\t\(.path)"'
+fi
