@@ -864,26 +864,22 @@ func (m Model) renderProjectList(height int) string {
 
 	for i := m.scrollOffset; i < len(m.filtered) && i < m.scrollOffset+height; i++ {
 		p := m.filtered[i]
-		row := m.renderProjectRow(p, i, listWidth)
 
-		// Pad row to full width for proper striping
-		rowLen := lipgloss.Width(row)
-		if rowLen < listWidth {
-			row = row + strings.Repeat(" ", listWidth-rowLen)
-		}
-
-		// Apply stripe + selection styles
+		// Determine row style based on selection and stripe
 		isSelected := i == m.selectedIdx
 		isOdd := (i-m.scrollOffset)%2 == 1
 
+		var rowStyle lipgloss.Style
 		if isSelected {
-			row = SelectedRowStyle.Render(row)
+			rowStyle = SelectedRowStyle
 		} else if isOdd {
-			row = RowOddStyle.Render(row)
+			rowStyle = RowOddStyle
 		} else {
-			row = RowEvenStyle.Render(row)
+			rowStyle = RowEvenStyle
 		}
 
+		// renderProjectRow now handles styling internally
+		row := m.renderProjectRow(p, i, listWidth, rowStyle)
 		rows = append(rows, row)
 	}
 
@@ -908,31 +904,31 @@ func (m Model) renderProjectList(height int) string {
 	return result.String()
 }
 
-func (m Model) renderProjectRow(p Project, idx int, width int) string {
+func (m Model) renderProjectRow(p Project, idx int, width int, rowStyle lipgloss.Style) string {
 	// Type icon based on detected language/type
 	typeIcon := getTypeIcon(p.Type)
 
-	// State color for type icon
-	typeStyle := lipgloss.NewStyle()
+	// Determine icon color based on state (we'll apply it within the row style)
+	var iconColor lipgloss.Color
 	switch p.VercelState {
 	case "ready":
-		typeStyle = typeStyle.Foreground(ColorGreen)
+		iconColor = ColorGreen
 	case "building":
-		typeStyle = typeStyle.Foreground(ColorYellow)
+		iconColor = ColorYellow
 	case "failed":
-		typeStyle = typeStyle.Foreground(ColorRed)
+		iconColor = ColorRed
 	default:
-		typeStyle = typeStyle.Foreground(ColorGray)
+		iconColor = ColorGray
 	}
 
 	// Time formatting with icons
 	projectAge := formatTimeSince(p.FirstCommit)
 	lastCommit := formatTimeSince(p.LastCommit)
 
-	// Build row: icon | name | age times | git stats | gh stats | actions
-	// Using IconCommitStart for project age (first commit) and IconCommitEnd for last commit
-	row := fmt.Sprintf("%s %-18s %s%4s %s%4s  %s%-2d %s%-2d %s%-2d  %s%-2d %s%-2d",
-		typeStyle.Render(typeIcon),
+	// Build row content as plain text first (no inner styling)
+	// icon | name | age times | git stats | gh stats | actions
+	content := fmt.Sprintf("%s %-18s %s%4s %s%4s  %s%-2d %s%-2d %s%-2d  %s%-2d %s%-2d",
+		typeIcon,
 		truncate(p.Name, 18),
 		IconCommitStart, projectAge,
 		IconCommitEnd, lastCommit,
@@ -943,24 +939,38 @@ func (m Model) renderProjectRow(p Project, idx int, width int) string {
 		IconPR, p.PRs,
 	)
 
-	// Calculate space for action buttons
-	rowLen := lipgloss.Width(row)
-	actionsWidth := width - rowLen - 2
-
-	// Action buttons (pinned right)
+	// Action buttons
 	actions := fmt.Sprintf("%s %s %s %s %s %s %s %s %s",
 		IconPush, IconMerge, IconPlayPause, IconDeploy,
 		IconReadme, IconRoadmap, IconPlan, IconTodo, IconChat)
 
-	if actionsWidth > 0 {
-		gap := actionsWidth - lipgloss.Width(actions)
-		if gap < 0 {
-			gap = 0
-		}
-		row += strings.Repeat(" ", gap) + ActionButtonStyle.Render(actions)
+	// Calculate gap for elastic spacing
+	contentWidth := lipgloss.Width(content)
+	actionsWidth := lipgloss.Width(actions)
+	gap := width - contentWidth - actionsWidth - 2
+	if gap < 0 {
+		gap = 0
 	}
 
-	return row
+	// Full row with elastic gap
+	fullRow := content + strings.Repeat(" ", gap) + actions
+
+	// Pad to full width
+	currentWidth := lipgloss.Width(fullRow)
+	if currentWidth < width {
+		fullRow += strings.Repeat(" ", width-currentWidth)
+	}
+
+	// Apply row style (background) to the entire row
+	// Then apply icon color just to the first character
+	styled := rowStyle.Width(width).Render(fullRow)
+
+	// Inject icon color at the start (replace first icon with colored version)
+	// This is a bit hacky but ensures the background extends fully
+	coloredIcon := lipgloss.NewStyle().Foreground(iconColor).Render(typeIcon)
+	styled = strings.Replace(styled, typeIcon, coloredIcon, 1)
+
+	return styled
 }
 
 // getTypeIcon returns the appropriate icon for a project type
