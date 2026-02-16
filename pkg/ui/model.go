@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,62 +16,72 @@ import (
 	"github.com/michaelmonetized/mission-control/pkg/openclaw"
 )
 
-// Project types
+// =============================================================================
+// TYPES
+// =============================================================================
+
 type ProjectType string
 
 const (
 	TypeVercel ProjectType = "vercel"
 	TypeSwift  ProjectType = "swift"
 	TypeCLI    ProjectType = "cli"
+	TypeGit    ProjectType = "git"
 )
 
-// Project represents a discovered project
+// Project represents a discovered project with all stats
 type Project struct {
-	Name     string
-	Path     string
-	Type     ProjectType
-	Running  bool
+	Name string
+	Path string
+	Type ProjectType
+
+	// Time-based stats
+	LastBuildTime  time.Time // Last Vercel/Swift build
+	FirstCommit    time.Time // Project age
+	LastCommit     time.Time // Time since last commit
+
 	// Git status
+	Staged    int
 	Untracked int
 	Modified  int
-	Files     int
+
 	// GitHub status
 	Issues int
 	PRs    int
-	// Deploy status
-	State string // ready, building, queued, failed
-	URL   string
+
+	// Vercel status
+	VercelState string // ready, building, queued, failed
+
+	// Swift status
+	SwiftClean  int
+	SwiftFailed int
+
+	// Running state
+	Running bool
 }
 
-// Stats holds aggregate counts
+// Stats holds aggregate counts for the status bar
 type Stats struct {
+	// Vercel
 	VercelReady    int
 	VercelBuilding int
 	VercelQueued   int
 	VercelFailed   int
-	SwiftSuccess   int
-	SwiftFailed    int
-	TotalFiles     int
+
+	// Swift
+	SwiftClean  int
+	SwiftFailed int
+
+	// Git
+	TotalStaged    int
 	TotalUntracked int
 	TotalModified  int
-	TotalIssues    int
-	TotalPRs       int
-	TotalProjects  int
-}
 
-// Messages for async loading
-type projectsLoadedMsg []Project
-type gitStatusMsg struct {
-	name   string
-	status *discover.GitStatus
-}
-type ghStatusMsg struct {
-	name   string
-	status *discover.GitHubStatus
-}
-type vercelStatusMsg struct {
-	name  string
-	state string
+	// GitHub
+	TotalIssues int
+	TotalPRs    int
+
+	TotalProjects int
 }
 
 // ViewMode determines current view
@@ -84,72 +95,117 @@ const (
 	HelpMode
 )
 
-// Model is the main application state
-type Model struct {
-	projects      []Project
-	filtered      []Project
-	stats         Stats
-	selectedIdx   int
-	viewMode      ViewMode
-	currentProject *Project
-	
-	searchInput   textinput.Model
-	chatInput     textinput.Model
-	
-	width         int
-	height        int
-	
-	// Vim motion accumulator
-	motionNum     string
-	
-	// Loading state
-	loading       bool
-	statusLoading sync.Map
-	
-	// OpenClaw chat
-	clawClient    *openclaw.Client
-	chatResponse  string
-	chatLoading   bool
-	chatError     string
+// =============================================================================
+// ASYNC MESSAGES
+// =============================================================================
+
+type projectsLoadedMsg []Project
+
+type gitStatusMsg struct {
+	name   string
+	status *discover.GitStatus
 }
 
-// Chat messages for async response
+type ghStatusMsg struct {
+	name   string
+	status *discover.GitHubStatus
+}
+
+type vercelStatusMsg struct {
+	name  string
+	state string
+}
+
+type gitTimesMsg struct {
+	name        string
+	firstCommit time.Time
+	lastCommit  time.Time
+}
+
 type chatResponseMsg struct {
 	response string
 	err      error
 }
 
-// NewModel creates a new application model
+// =============================================================================
+// MODEL
+// =============================================================================
+
+type Model struct {
+	projects []Project
+	filtered []Project
+	stats    Stats
+
+	selectedIdx int
+	scrollOffset int
+	viewMode    ViewMode
+
+	currentProject *Project
+
+	searchInput textinput.Model
+	chatInput   textinput.Model
+	chatCwd     string // ~/Projects or selected project path
+
+	width  int
+	height int
+
+	// Vim motion accumulator
+	motionNum string
+
+	// Loading state
+	loading       bool
+	statusLoading sync.Map
+
+	// OpenClaw
+	clawClient   *openclaw.Client
+	chatResponse string
+	chatLoading  bool
+	chatError    string
+}
+
+// =============================================================================
+// INITIALIZATION
+// =============================================================================
+
 func NewModel() Model {
 	search := textinput.New()
-	search.Placeholder = "Search projects..."
+	search.Placeholder = "type / to search"
 	search.CharLimit = 50
-	
+
 	chat := textinput.New()
-	chat.Placeholder = "Ask OpenClaw..."
+	chat.Placeholder = "type C to chat in ~/Projects c to chat in selected project"
 	chat.CharLimit = 500
-	
-	// Try to connect to OpenClaw gateway
+
 	clawClient, _ := openclaw.NewClientFromConfig()
-	
+
+	homeDir, _ := os.UserHomeDir()
+
 	return Model{
 		projects:    []Project{},
 		filtered:    []Project{},
 		searchInput: search,
 		chatInput:   chat,
+		chatCwd:     filepath.Join(homeDir, "Projects"),
 		viewMode:    ListView,
 		loading:     true,
 		clawClient:  clawClient,
 	}
 }
 
-// loadProjectsCmd loads projects asynchronously
+func (m Model) Init() tea.Cmd {
+	return loadProjectsCmd
+}
+
+// =============================================================================
+// ASYNC COMMANDS
+// =============================================================================
+
 func loadProjectsCmd() tea.Msg {
 	discovered, err := discover.LoadProjects()
 	if err != nil {
 		return projectsLoadedMsg{}
 	}
-	
+
 	projects := make([]Project, 0, len(discovered))
 	for _, d := range discovered {
 		var pType ProjectType
@@ -159,7 +215,7 @@ func loadProjectsCmd() tea.Msg {
 		case "swift":
 			pType = TypeSwift
 		default:
-			pType = TypeCLI
+			pType = TypeGit
 		}
 		projects = append(projects, Project{
 			Name: d.Name,
@@ -167,11 +223,10 @@ func loadProjectsCmd() tea.Msg {
 			Type: pType,
 		})
 	}
-	
+
 	return projectsLoadedMsg(projects)
 }
 
-// loadGitStatusCmd loads git status for a project
 func loadGitStatusCmd(name, path string) tea.Cmd {
 	return func() tea.Msg {
 		status, _ := discover.GetGitStatus(path)
@@ -179,7 +234,6 @@ func loadGitStatusCmd(name, path string) tea.Cmd {
 	}
 }
 
-// loadGHStatusCmd loads GitHub status for a project
 func loadGHStatusCmd(name, path string) tea.Cmd {
 	return func() tea.Msg {
 		status, _ := discover.GetGitHubStatus(path)
@@ -187,7 +241,6 @@ func loadGHStatusCmd(name, path string) tea.Cmd {
 	}
 }
 
-// loadVercelStatusCmd loads Vercel status for a project
 func loadVercelStatusCmd(name, path string) tea.Cmd {
 	return func() tea.Msg {
 		state, _ := discover.GetVercelStatus(path)
@@ -195,144 +248,68 @@ func loadVercelStatusCmd(name, path string) tea.Cmd {
 	}
 }
 
-// openInEditorCmd opens a project or file in nvim
-func openInEditorCmd(projectPath, file string) tea.Cmd {
-	return tea.ExecProcess(
-		func() *exec.Cmd {
-			expandedPath := expandPath(projectPath)
-			if file != "" {
-				return exec.Command("nvim", filepath.Join(expandedPath, file))
-			}
-			cmd := exec.Command("nvim", ".")
-			cmd.Dir = expandedPath
-			return cmd
-		}(),
-		nil,
-	)
-}
-
-// openClawCmd opens OpenClaw TUI in a project
-func openClawCmd(projectPath string) tea.Cmd {
-	return tea.ExecProcess(
-		func() *exec.Cmd {
-			expandedPath := expandPath(projectPath)
-			cmd := exec.Command("openclaw")
-			cmd.Dir = expandedPath
-			return cmd
-		}(),
-		nil,
-	)
-}
-
-// openProductionCmd opens the production URL
-func openProductionCmd(projectName string) tea.Cmd {
-	return tea.ExecProcess(
-		exec.Command("open", fmt.Sprintf("https://%s", projectName)),
-		nil,
-	)
-}
-
-// openLazygitCmd opens lazygit in a project
-func openLazygitCmd(projectPath string) tea.Cmd {
-	return tea.ExecProcess(
-		func() *exec.Cmd {
-			expandedPath := expandPath(projectPath)
-			cmd := exec.Command("lazygit")
-			cmd.Dir = expandedPath
-			return cmd
-		}(),
-		nil,
-	)
-}
-
-// expandPath expands ~ to home directory
-func expandPath(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, path[2:])
+func loadGitTimesCmd(name, path string) tea.Cmd {
+	return func() tea.Msg {
+		first, last := discover.GetGitTimes(path)
+		return gitTimesMsg{name: name, firstCommit: first, lastCommit: last}
 	}
-	return path
 }
 
-func calculateStats(projects []Project) Stats {
-	var s Stats
-	for _, p := range projects {
-		s.TotalUntracked += p.Untracked
-		s.TotalModified += p.Modified
-		s.TotalFiles += p.Files
-		s.TotalIssues += p.Issues
-		s.TotalPRs += p.PRs
-		
-		switch p.State {
-		case "ready":
-			s.VercelReady++
-		case "building":
-			s.VercelBuilding++
-		case "queued":
-			s.VercelQueued++
-		case "failed":
-			s.VercelFailed++
-		case "success":
-			s.SwiftSuccess++
+func sendChatCmd(client *openclaw.Client, message, cwd string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return chatResponseMsg{err: fmt.Errorf("OpenClaw not connected")}
 		}
+		response, err := client.SendMessageSync(message, cwd)
+		return chatResponseMsg{response: response, err: err}
 	}
-	return s
 }
 
-// Init implements tea.Model
-func (m Model) Init() tea.Cmd {
-	return loadProjectsCmd
-}
+// =============================================================================
+// UPDATE
+// =============================================================================
 
-// Update implements tea.Model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+
 	case projectsLoadedMsg:
 		m.projects = []Project(msg)
 		m.filtered = m.projects
 		m.loading = false
-		m.stats = calculateStats(m.projects)
 		m.stats.TotalProjects = len(m.projects)
-		
-		// Start loading statuses for visible projects
+
+		// Start loading stats incrementally (non-blocking)
 		var cmds []tea.Cmd
-		for i, p := range m.projects {
-			if i >= 20 { // Limit initial batch
-				break
-			}
+		for _, p := range m.projects {
 			cmds = append(cmds, loadGitStatusCmd(p.Name, p.Path))
+			cmds = append(cmds, loadGitTimesCmd(p.Name, p.Path))
 			if p.Type == TypeVercel {
 				cmds = append(cmds, loadVercelStatusCmd(p.Name, p.Path))
 			}
+			cmds = append(cmds, loadGHStatusCmd(p.Name, p.Path))
 		}
 		return m, tea.Batch(cmds...)
-		
+
 	case gitStatusMsg:
 		for i := range m.projects {
 			if m.projects[i].Name == msg.name && msg.status != nil {
+				m.projects[i].Staged = msg.status.Staged
 				m.projects[i].Untracked = msg.status.Untracked
 				m.projects[i].Modified = msg.status.Modified
 				break
 			}
 		}
-		m.stats = calculateStats(m.projects)
-		m.stats.TotalProjects = len(m.projects)
-		// Update filtered too
-		for i := range m.filtered {
-			if m.filtered[i].Name == msg.name && msg.status != nil {
-				m.filtered[i].Untracked = msg.status.Untracked
-				m.filtered[i].Modified = msg.status.Modified
-				break
-			}
-		}
+		m.updateStats()
+		m.syncFiltered()
 		return m, nil
-		
+
 	case ghStatusMsg:
 		for i := range m.projects {
 			if m.projects[i].Name == msg.name && msg.status != nil {
@@ -341,27 +318,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		m.stats = calculateStats(m.projects)
-		m.stats.TotalProjects = len(m.projects)
+		m.updateStats()
 		return m, nil
-		
+
 	case vercelStatusMsg:
 		for i := range m.projects {
 			if m.projects[i].Name == msg.name {
-				m.projects[i].State = msg.state
+				m.projects[i].VercelState = msg.state
 				break
 			}
 		}
-		m.stats = calculateStats(m.projects)
-		m.stats.TotalProjects = len(m.projects)
-		for i := range m.filtered {
-			if m.filtered[i].Name == msg.name {
-				m.filtered[i].State = msg.state
-				break
-			}
-		}
+		m.updateStats()
+		m.syncFiltered()
 		return m, nil
-		
+
+	case gitTimesMsg:
+		for i := range m.projects {
+			if m.projects[i].Name == msg.name {
+				m.projects[i].FirstCommit = msg.firstCommit
+				m.projects[i].LastCommit = msg.lastCommit
+				break
+			}
+		}
+		m.syncFiltered()
+		return m, nil
+
 	case chatResponseMsg:
 		m.chatLoading = false
 		if msg.err != nil {
@@ -371,12 +352,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+
 	return m, nil
 }
 
+func (m *Model) updateStats() {
+	var s Stats
+	s.TotalProjects = len(m.projects)
+
+	for _, p := range m.projects {
+		s.TotalStaged += p.Staged
+		s.TotalUntracked += p.Untracked
+		s.TotalModified += p.Modified
+		s.TotalIssues += p.Issues
+		s.TotalPRs += p.PRs
+		s.SwiftClean += p.SwiftClean
+		s.SwiftFailed += p.SwiftFailed
+
+		switch p.VercelState {
+		case "ready":
+			s.VercelReady++
+		case "building":
+			s.VercelBuilding++
+		case "queued":
+			s.VercelQueued++
+		case "failed":
+			s.VercelFailed++
+		}
+	}
+
+	m.stats = s
+}
+
+func (m *Model) syncFiltered() {
+	// Re-sync filtered with updated project data
+	query := strings.ToLower(m.searchInput.Value())
+	if query == "" {
+		m.filtered = m.projects
+	} else {
+		m.filtered = nil
+		for _, p := range m.projects {
+			if strings.Contains(strings.ToLower(p.Name), query) {
+				m.filtered = append(m.filtered, p)
+			}
+		}
+	}
+}
+
+// =============================================================================
+// KEY HANDLING
+// =============================================================================
+
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
-	
+
 	// Global keys
 	switch key {
 	case "q", "ctrl+c":
@@ -391,11 +420,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchInput.SetValue("")
 			m.chatInput.SetValue("")
 			m.filtered = m.projects
+			m.chatResponse = ""
+			m.chatError = ""
 		}
 		return m, nil
 	}
-	
-	// Mode-specific handling
+
 	switch m.viewMode {
 	case SearchMode:
 		return m.handleSearchKey(msg)
@@ -408,37 +438,56 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
-	
-	// Check for number prefix (vim motion)
+
+	// Vim motion number prefix
 	if key >= "0" && key <= "9" && (m.motionNum != "" || key != "0") {
 		m.motionNum += key
 		return m, nil
 	}
-	
+
 	count := 1
 	if m.motionNum != "" {
 		fmt.Sscanf(m.motionNum, "%d", &count)
 		m.motionNum = ""
 	}
-	
+
+	listHeight := m.getListHeight()
+
 	switch key {
 	case "j", "down":
 		m.selectedIdx = min(m.selectedIdx+count, len(m.filtered)-1)
+		m.ensureVisible(listHeight)
 	case "k", "up":
-		m.selectedIdx = max(m.selectedIdx-count, 0)
+		m.selectedIdx = maxInt(m.selectedIdx-count, 0)
+		m.ensureVisible(listHeight)
 	case "g":
 		m.selectedIdx = 0
+		m.scrollOffset = 0
 	case "G":
 		m.selectedIdx = len(m.filtered) - 1
+		m.ensureVisible(listHeight)
 	case "ctrl+d":
-		m.selectedIdx = min(m.selectedIdx+10, len(m.filtered)-1)
+		m.selectedIdx = min(m.selectedIdx+listHeight/2, len(m.filtered)-1)
+		m.ensureVisible(listHeight)
 	case "ctrl+u":
-		m.selectedIdx = max(m.selectedIdx-10, 0)
+		m.selectedIdx = maxInt(m.selectedIdx-listHeight/2, 0)
+		m.ensureVisible(listHeight)
 	case "/":
 		m.viewMode = SearchMode
 		m.searchInput.Focus()
 		return m, textinput.Blink
-	case ">":
+	case "C":
+		// Chat in ~/Projects
+		homeDir, _ := os.UserHomeDir()
+		m.chatCwd = filepath.Join(homeDir, "Projects")
+		m.viewMode = ChatMode
+		m.chatInput.Focus()
+		return m, textinput.Blink
+	case "c":
+		// Chat in selected project
+		if len(m.filtered) > 0 {
+			m.chatCwd = expandPath(m.filtered[m.selectedIdx].Path)
+		}
 		m.viewMode = ChatMode
 		m.chatInput.Focus()
 		return m, textinput.Blink
@@ -448,64 +497,57 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.viewMode = DetailView
 		}
 	case "o":
-		// Open project in nvim
 		if len(m.filtered) > 0 {
-			p := m.filtered[m.selectedIdx]
-			return m, openInEditorCmd(p.Path, "")
+			return m, openInEditorCmd(m.filtered[m.selectedIdx].Path, "")
 		}
 	case "r":
-		// Edit README
 		if len(m.filtered) > 0 {
-			p := m.filtered[m.selectedIdx]
-			return m, openInEditorCmd(p.Path, "README.md")
+			return m, openInEditorCmd(m.filtered[m.selectedIdx].Path, "README.md")
 		}
 	case "R":
-		// Edit ROADMAP
 		if len(m.filtered) > 0 {
-			p := m.filtered[m.selectedIdx]
-			return m, openInEditorCmd(p.Path, "ROADMAP.md")
+			return m, openInEditorCmd(m.filtered[m.selectedIdx].Path, "ROADMAP.md")
 		}
 	case "p":
-		// Edit PLAN
 		if len(m.filtered) > 0 {
-			p := m.filtered[m.selectedIdx]
-			return m, openInEditorCmd(p.Path, "PLAN.md")
+			return m, openInEditorCmd(m.filtered[m.selectedIdx].Path, "PLAN.md")
 		}
 	case "t":
-		// Edit TODO
 		if len(m.filtered) > 0 {
-			p := m.filtered[m.selectedIdx]
-			return m, openInEditorCmd(p.Path, "TODO.md")
+			return m, openInEditorCmd(m.filtered[m.selectedIdx].Path, "TODO.md")
 		}
-	case "c":
-		// Launch OpenClaw TUI in project
+	case "l":
 		if len(m.filtered) > 0 {
-			p := m.filtered[m.selectedIdx]
-			return m, openClawCmd(p.Path)
+			return m, openLazygitCmd(m.filtered[m.selectedIdx].Path)
 		}
 	case "d":
-		// Open production URL
 		if len(m.filtered) > 0 {
 			p := m.filtered[m.selectedIdx]
 			if p.Type == TypeVercel {
 				return m, openProductionCmd(p.Name)
 			}
 		}
-	case "l":
-		// Lazygit
-		if len(m.filtered) > 0 {
-			p := m.filtered[m.selectedIdx]
-			return m, openLazygitCmd(p.Path)
-		}
 	case "?":
 		m.viewMode = HelpMode
 	case "ctrl+r":
-		// Refresh all
 		m.loading = true
 		return m, loadProjectsCmd
 	}
-	
+
 	return m, nil
+}
+
+func (m *Model) ensureVisible(listHeight int) {
+	if m.selectedIdx < m.scrollOffset {
+		m.scrollOffset = m.selectedIdx
+	} else if m.selectedIdx >= m.scrollOffset+listHeight {
+		m.scrollOffset = m.selectedIdx - listHeight + 1
+	}
+}
+
+func (m *Model) getListHeight() int {
+	// Total height minus: top status (1) + search box (3) + chat box (3) + bottom status (1)
+	return maxInt(m.height-8, 5)
 }
 
 func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -519,10 +561,10 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filtered = m.projects
 		return m, nil
 	}
-	
+
 	var cmd tea.Cmd
 	m.searchInput, cmd = m.searchInput.Update(msg)
-	
+
 	// Filter projects
 	query := strings.ToLower(m.searchInput.Value())
 	if query == "" {
@@ -536,7 +578,8 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.selectedIdx = 0
-	
+	m.scrollOffset = 0
+
 	return m, cmd
 }
 
@@ -547,294 +590,466 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if message == "" {
 			return m, nil
 		}
-		
-		// Get project context if one is selected
-		projectContext := ""
-		if len(m.filtered) > 0 && m.selectedIdx < len(m.filtered) {
-			p := m.filtered[m.selectedIdx]
-			projectContext = fmt.Sprintf("Project: %s (%s) at %s", p.Name, p.Type, p.Path)
-		}
-		
+
 		m.chatInput.SetValue("")
 		m.chatLoading = true
 		m.chatResponse = ""
 		m.chatError = ""
-		
-		return m, sendChatCmd(m.clawClient, message, projectContext)
+
+		return m, sendChatCmd(m.clawClient, message, m.chatCwd)
 	case "esc":
 		m.viewMode = ListView
 		m.chatResponse = ""
 		m.chatError = ""
 		return m, nil
 	}
-	
+
 	var cmd tea.Cmd
 	m.chatInput, cmd = m.chatInput.Update(msg)
 	return m, cmd
 }
 
-// sendChatCmd sends a message to OpenClaw
-func sendChatCmd(client *openclaw.Client, message, projectContext string) tea.Cmd {
-	return func() tea.Msg {
-		if client == nil {
-			return chatResponseMsg{err: fmt.Errorf("OpenClaw not connected")}
-		}
-		
-		response, err := client.SendMessageSync(message, projectContext)
-		return chatResponseMsg{response: response, err: err}
-	}
-}
+// =============================================================================
+// VIEW
+// =============================================================================
 
-// View implements tea.Model
 func (m Model) View() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
-	
+
 	if m.loading {
-		return "🚀 Discovering projects..."
+		return fmt.Sprintf("\n  %s Mission Control - Discovering projects...\n", IconRocket)
 	}
-	
+
 	var b strings.Builder
-	
+
 	// Top status line
 	b.WriteString(m.renderTopStatus())
 	b.WriteString("\n")
-	
-	// Search bar
-	b.WriteString(m.renderSearchBar())
+
+	// Search box (rounded)
+	b.WriteString(m.renderSearchBox())
 	b.WriteString("\n")
-	
-	// Main content
-	contentHeight := m.height - 6 // top(1) + search(1) + chat(1) + bottom(1) + padding
-	b.WriteString(m.renderContent(contentHeight))
-	
-	// Chat bar
-	b.WriteString(m.renderChatBar())
+
+	// Project list with scrollbar
+	listHeight := m.getListHeight()
+	b.WriteString(m.renderProjectList(listHeight))
+
+	// Chat box (rounded)
+	b.WriteString(m.renderChatBox())
 	b.WriteString("\n")
-	
+
 	// Bottom status line
 	b.WriteString(m.renderBottomStatus())
-	
+
 	return b.String()
 }
 
+// =============================================================================
+// TOP STATUS LINE (Powerline style)
+// =============================================================================
+
 func (m Model) renderTopStatus() string {
-	// Title
-	title := "🚀Mission Control"
-	if m.viewMode == DetailView && m.currentProject != nil {
-		title = fmt.Sprintf("🚀 mc:%s", m.currentProject.Name)
+	// Title segment: mint
+	title := fmt.Sprintf(" %s Mission Control ", IconRocket)
+	titleSeg := lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorMint).Render(title)
+	titleCapL := lipgloss.NewStyle().Foreground(ColorMint).Render(PLLeftHalfCircle)
+	titleCapR := lipgloss.NewStyle().Foreground(ColorMint).Render(PLLowerLeftTriangle)
+
+	// Vercel segment: yellow
+	vercel := fmt.Sprintf(" %s %d%s %d%s %d%s %d%s ",
+		IconVercel,
+		m.stats.VercelReady, IconReady,
+		m.stats.VercelBuilding, IconBuilding,
+		m.stats.VercelQueued, IconQueued,
+		m.stats.VercelFailed, IconX)
+	vercelSeg := lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorVercel).Render(vercel)
+	vercelCapL := lipgloss.NewStyle().Foreground(ColorVercel).Render(PLUpperRightTriangle)
+	vercelCapR := lipgloss.NewStyle().Foreground(ColorVercel).Render(PLLowerLeftTriangle)
+
+	// Swift segment: magenta
+	swift := fmt.Sprintf(" %s %d%s %d%s ",
+		IconSwift,
+		m.stats.SwiftClean, IconCheck,
+		m.stats.SwiftFailed, IconX)
+	swiftSeg := lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorSwift).Render(swift)
+	swiftCapL := lipgloss.NewStyle().Foreground(ColorSwift).Render(PLUpperRightTriangle)
+	swiftCapR := lipgloss.NewStyle().Foreground(ColorSwift).Render(PLFlameThick)
+
+	// Calculate elastic gap
+	leftPart := titleCapL + titleSeg + titleCapR + vercelCapL + vercelSeg + vercelCapR + swiftCapL + swiftSeg + swiftCapR
+	leftLen := lipgloss.Width(leftPart)
+
+	// Git segment: cyan
+	git := fmt.Sprintf(" %s %s%d %s%d %s%d ",
+		IconGit,
+		IconStaged, m.stats.TotalStaged,
+		IconUntracked, m.stats.TotalUntracked,
+		IconModified, m.stats.TotalModified)
+	gitSeg := lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGit).Render(git)
+	gitCapL := lipgloss.NewStyle().Foreground(ColorGit).Render(PLFlameThickMirrored)
+	gitCapR := lipgloss.NewStyle().Foreground(ColorGit).Render(PLRightHardDivider)
+
+	// GitHub segment: green
+	gh := fmt.Sprintf(" %s %s%d %s%d ",
+		IconGitHub,
+		IconIssue, m.stats.TotalIssues,
+		IconPR, m.stats.TotalPRs)
+	ghSeg := lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGH).Render(gh)
+	ghCapL := lipgloss.NewStyle().Foreground(ColorGH).Render(PLLeftHardDivider)
+	ghCapR := lipgloss.NewStyle().Foreground(ColorGH).Render(PLRightHalfCircle)
+
+	rightPart := gitCapL + gitSeg + gitCapR + ghCapL + ghSeg + ghCapR
+	rightLen := lipgloss.Width(rightPart)
+
+	// Elastic gap
+	gap := m.width - leftLen - rightLen
+	if gap < 0 {
+		gap = 0
 	}
-	
-	// Vercel segment
-	vercel := fmt.Sprintf(" %d%s %d%s %d%s %d%s",
-		m.stats.VercelReady, ReadyIcon,
-		m.stats.VercelBuilding, BuildingIcon,
-		m.stats.VercelQueued, QueuedIcon,
-		m.stats.VercelFailed, FailedIcon)
-	
-	// Swift segment
-	swift := fmt.Sprintf(" %d%s %d%s",
-		m.stats.SwiftSuccess, SuccessIcon,
-		m.stats.SwiftFailed, FailIcon)
-	
-	// Git segment
-	git := fmt.Sprintf(" %d%s %d%s %d%s %d%s",
-		m.stats.TotalUntracked, UntrackedIcon,
-		m.stats.TotalModified, ModifiedIcon,
-		m.stats.TotalIssues, IssuesIcon,
-		m.stats.TotalPRs, PRsIcon)
-	
-	left := TitleStyle.Render(title) + " " +
-		VercelStyle.Render(vercel) + " " +
-		SwiftStyle.Render(swift) + " " +
-		GitStyle.Render(git)
-	
-	return left
+
+	return leftPart + strings.Repeat(" ", gap) + rightPart
 }
 
-func (m Model) renderSearchBar() string {
-	prefix := SearchStyle.Render("/")
-	if m.viewMode == SearchMode {
-		return prefix + " " + m.searchInput.View()
+// =============================================================================
+// SEARCH BOX (Rounded)
+// =============================================================================
+
+func (m Model) renderSearchBox() string {
+	content := fmt.Sprintf("%s %s", IconSearch, m.searchInput.View())
+	if m.viewMode != SearchMode {
+		content = fmt.Sprintf("%s %s", IconSearch, m.searchInput.Placeholder)
 	}
-	return prefix + " " + SearchInputStyle.Render(m.searchInput.Placeholder)
+
+	box := SearchBoxStyle.Width(m.width - 4).Render(content)
+	return box
 }
 
-func (m Model) renderContent(height int) string {
-	switch m.viewMode {
-	case DetailView:
-		return m.renderDetailView(height)
-	case HelpMode:
+// =============================================================================
+// PROJECT LIST (Striped with scrollbar)
+// =============================================================================
+
+func (m Model) renderProjectList(height int) string {
+	if m.viewMode == HelpMode {
 		return m.renderHelp(height)
-	default:
-		return m.renderProjectList(height)
 	}
+	if m.viewMode == DetailView {
+		return m.renderDetailView(height)
+	}
+
+	var rows []string
+	listWidth := m.width - 3 // Leave room for scrollbar
+
+	for i := m.scrollOffset; i < len(m.filtered) && i < m.scrollOffset+height; i++ {
+		p := m.filtered[i]
+		row := m.renderProjectRow(p, i, listWidth)
+
+		// Apply stripe + selection styles
+		isSelected := i == m.selectedIdx
+		isOdd := (i-m.scrollOffset)%2 == 1
+
+		if isSelected {
+			row = SelectedRowStyle.Width(listWidth).Render(row)
+		} else if isOdd {
+			row = RowOddStyle.Width(listWidth).Render(row)
+		} else {
+			row = RowEvenStyle.Width(listWidth).Render(row)
+		}
+
+		rows = append(rows, row)
+	}
+
+	// Pad remaining height
+	for i := len(rows); i < height; i++ {
+		rows = append(rows, strings.Repeat(" ", listWidth))
+	}
+
+	// Add scrollbar
+	scrollbar := RenderScrollbar(m.scrollOffset, len(m.filtered), height)
+	scrollLines := strings.Split(scrollbar, "\n")
+
+	var result strings.Builder
+	for i, row := range rows {
+		sb := " "
+		if i < len(scrollLines) {
+			sb = scrollLines[i]
+		}
+		result.WriteString(row + " " + sb + "\n")
+	}
+
+	return result.String()
 }
+
+func (m Model) renderProjectRow(p Project, idx int, width int) string {
+	// Type icon
+	var typeIcon string
+	switch p.Type {
+	case TypeVercel:
+		typeIcon = IconVercel
+	case TypeSwift:
+		typeIcon = IconSwift
+	default:
+		typeIcon = IconGit
+	}
+
+	// State color for type icon
+	typeStyle := lipgloss.NewStyle()
+	switch p.VercelState {
+	case "ready":
+		typeStyle = typeStyle.Foreground(ColorGreen)
+	case "building":
+		typeStyle = typeStyle.Foreground(ColorYellow)
+	case "failed":
+		typeStyle = typeStyle.Foreground(ColorRed)
+	default:
+		typeStyle = typeStyle.Foreground(ColorGray)
+	}
+
+	// Time formatting
+	lastBuild := formatTimeSince(p.LastBuildTime)
+	projectAge := formatTimeSince(p.FirstCommit)
+	lastCommit := formatTimeSince(p.LastCommit)
+
+	// Build row: icon | name | times | git stats | gh stats | actions
+	row := fmt.Sprintf("%s %-18s %4s %4s %4s  %s%-2d %s%-2d %s%-2d  %s%-2d %s%-2d",
+		typeStyle.Render(typeIcon),
+		truncate(p.Name, 18),
+		lastBuild,
+		projectAge,
+		lastCommit,
+		IconStaged, p.Staged,
+		IconUntracked, p.Untracked,
+		IconModified, p.Modified,
+		IconIssue, p.Issues,
+		IconPR, p.PRs,
+	)
+
+	// Calculate space for action buttons
+	rowLen := lipgloss.Width(row)
+	actionsWidth := width - rowLen - 2
+
+	// Action buttons (pinned right)
+	actions := fmt.Sprintf("%s %s %s %s %s %s %s %s %s",
+		IconPush, IconMerge, IconPlayPause, IconDeploy,
+		IconReadme, IconRoadmap, IconPlan, IconTodo, IconChat)
+
+	if actionsWidth > 0 {
+		gap := actionsWidth - lipgloss.Width(actions)
+		if gap < 0 {
+			gap = 0
+		}
+		row += strings.Repeat(" ", gap) + ActionButtonStyle.Render(actions)
+	}
+
+	return row
+}
+
+func formatTimeSince(t time.Time) string {
+	if t.IsZero() {
+		return "  - "
+	}
+
+	d := time.Since(t)
+
+	if d < time.Minute {
+		return fmt.Sprintf("%2ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%2dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%2dh", int(d.Hours()))
+	}
+	if d < 7*24*time.Hour {
+		return fmt.Sprintf("%2dd", int(d.Hours()/24))
+	}
+	if d < 30*24*time.Hour {
+		return fmt.Sprintf("%2dw", int(d.Hours()/(24*7)))
+	}
+	if d < 365*24*time.Hour {
+		return fmt.Sprintf("%2dM", int(d.Hours()/(24*30)))
+	}
+	return fmt.Sprintf("%2dy", int(d.Hours()/(24*365)))
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-1] + "…"
+}
+
+// =============================================================================
+// CHAT BOX (Rounded)
+// =============================================================================
+
+func (m Model) renderChatBox() string {
+	var content string
+
+	if m.chatLoading {
+		content = fmt.Sprintf("%s Thinking...", IconBrain)
+	} else if m.chatError != "" {
+		content = fmt.Sprintf("%s %s", IconX, m.chatError)
+	} else if m.chatResponse != "" {
+		resp := strings.ReplaceAll(m.chatResponse, "\n", " ")
+		if len(resp) > m.width-10 {
+			resp = resp[:m.width-13] + "..."
+		}
+		content = fmt.Sprintf("%s %s", IconChat, resp)
+	} else if m.viewMode == ChatMode {
+		content = fmt.Sprintf("%s %s", IconChat, m.chatInput.View())
+	} else {
+		cwdDisplay := "~/Projects"
+		if m.chatCwd != "" && !strings.HasSuffix(m.chatCwd, "/Projects") {
+			cwdDisplay = filepath.Base(m.chatCwd)
+		}
+		content = fmt.Sprintf("%s type C to chat in ~/Projects c to chat in %s", IconChat, cwdDisplay)
+	}
+
+	box := ChatBoxStyle.Width(m.width - 4).Render(content)
+	return box
+}
+
+// =============================================================================
+// BOTTOM STATUS LINE
+// =============================================================================
+
+func (m Model) renderBottomStatus() string {
+	// Left side: project count + add
+	left := fmt.Sprintf("%s %d  %s",
+		IconProjects, m.stats.TotalProjects, IconPlus)
+
+	// Right side: OpenClaw status + model + thinking + tokens
+	connected := IconConnected
+	if m.clawClient == nil {
+		connected = IconX
+	}
+
+	// TODO: Get real values from OpenClaw client
+	agent := "main:main"
+	model := "anthropic/claude-sonnet-4"
+	thinking := "high"
+	tokens := "35k/200k (18%)"
+
+	right := fmt.Sprintf("%s %s  %s  %s %s  %s %s",
+		connected, agent, model,
+		IconBrain, thinking, IconCoins, tokens)
+
+	// Elastic gap
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 0 {
+		gap = 1
+	}
+
+	return BottomStatusStyle.Render(left) + strings.Repeat(" ", gap) + BottomStatusStyle.Render(right)
+}
+
+// =============================================================================
+// HELP VIEW
+// =============================================================================
 
 func (m Model) renderHelp(height int) string {
 	help := `
-🚀 Mission Control - Keyboard Shortcuts
+  Mission Control - Keyboard Shortcuts
 
-Navigation
-  j/k      Move down/up
-  g/G      Go to top/bottom
-  Ctrl+d/u Page down/up
-  /        Search projects
-  Enter    Select project
+  Navigation
+    j/k        Move down/up
+    g/G        Go to top/bottom
+    Ctrl+d/u   Page down/up
+    /          Search projects
+    Enter      Select project
 
-Actions
-  o        Open project in nvim
-  l        Open lazygit
-  d        Open production URL (Vercel)
-  c        Launch OpenClaw TUI
-  
-Files
-  r        Edit README.md
-  R        Edit ROADMAP.md
-  p        Edit PLAN.md
-  t        Edit TODO.md
+  Actions
+    o          Open project in nvim
+    l          Open lazygit
+    d          Open production URL (Vercel)
 
-Other
-  >        OpenClaw chat
-  Ctrl+r   Refresh all
-  ?        Show this help
-  q/Esc    Back/Quit
+  Files
+    r          Edit README.md
+    R          Edit ROADMAP.md
+    p          Edit PLAN.md
+    t          Edit TODO.md
+
+  Chat
+    C          Chat in ~/Projects
+    c          Chat in selected project
+
+  Other
+    Ctrl+r     Refresh all
+    ?          Show this help
+    q/Esc      Back/Quit
 `
 	return help
 }
 
-func (m Model) renderProjectList(height int) string {
-	var b strings.Builder
-	
-	for i, p := range m.filtered {
-		if i >= height {
-			break
-		}
-		
-		// Play/pause icon
-		playIcon := PauseIcon
-		if p.Running {
-			playIcon = PlayIcon
-		}
-		
-		// Type icon
-		var typeIcon string
-		switch p.Type {
-		case TypeVercel:
-			typeIcon = VercelIcon
-		case TypeSwift:
-			typeIcon = SwiftIcon
-		case TypeCLI:
-			typeIcon = CLIIcon
-		}
-		
-		// State indicator
-		var stateStyle lipgloss.Style
-		switch p.State {
-		case "ready", "success":
-			stateStyle = ReadyStyle
-		case "building":
-			stateStyle = BuildingStyle
-		case "queued":
-			stateStyle = QueuedStyle
-		case "failed":
-			stateStyle = FailedStyle
-		default:
-			stateStyle = QueuedStyle
-		}
-		
-		// Build row
-		row := fmt.Sprintf("[%s] %s %s  %d%s %d%s %d%s %d%s",
-			playIcon,
-			stateStyle.Render(typeIcon),
-			p.Name,
-			p.Untracked, UntrackedIcon,
-			p.Modified, ModifiedIcon,
-			p.Issues, IssuesIcon,
-			p.PRs, PRsIcon)
-		
-		// Add action buttons
-		row += fmt.Sprintf("  %s %s %s", ProdIcon, EditorIcon, OpenClawIcon)
-		
-		// Apply selection style
-		if i == m.selectedIdx {
-			row = SelectedRowStyle.Render(row)
-		} else {
-			row = ProjectRowStyle.Render(row)
-		}
-		
-		b.WriteString(row)
-		b.WriteString("\n")
-	}
-	
-	// Pad remaining height
-	for i := len(m.filtered); i < height; i++ {
-		b.WriteString("\n")
-	}
-	
-	return b.String()
-}
+// =============================================================================
+// DETAIL VIEW
+// =============================================================================
 
 func (m Model) renderDetailView(height int) string {
 	if m.currentProject == nil {
-		return "No project selected"
+		return "No project selected\n\nPress 'q' or 'esc' to go back"
 	}
-	
+
 	p := m.currentProject
 	var b strings.Builder
-	
-	b.WriteString(fmt.Sprintf("Project: %s\n", p.Name))
-	b.WriteString(fmt.Sprintf("Path: %s\n", p.Path))
-	b.WriteString(fmt.Sprintf("Type: %s\n", p.Type))
-	b.WriteString(fmt.Sprintf("State: %s\n", p.State))
-	b.WriteString("\n")
-	b.WriteString("Press 'q' or 'esc' to go back\n")
-	
+
+	b.WriteString(fmt.Sprintf("\n  Project: %s\n", p.Name))
+	b.WriteString(fmt.Sprintf("  Path: %s\n", p.Path))
+	b.WriteString(fmt.Sprintf("  Type: %s\n", p.Type))
+	b.WriteString(fmt.Sprintf("  State: %s\n", p.VercelState))
+	b.WriteString(fmt.Sprintf("\n  Git: %d staged, %d untracked, %d modified\n", p.Staged, p.Untracked, p.Modified))
+	b.WriteString(fmt.Sprintf("  GitHub: %d issues, %d PRs\n", p.Issues, p.PRs))
+	b.WriteString("\n  Press 'q' or 'esc' to go back\n")
+
 	return b.String()
 }
 
-func (m Model) renderChatBar() string {
-	prefix := ChatPromptStyle.Render(">")
-	
-	// Show loading indicator
-	if m.chatLoading {
-		return prefix + " 󰔟 Thinking..."
-	}
-	
-	// Show error
-	if m.chatError != "" {
-		return prefix + " " + FailedStyle.Render("✗ "+m.chatError)
-	}
-	
-	// Show response (truncate to fit)
-	if m.chatResponse != "" {
-		response := m.chatResponse
-		// Clean up response (remove newlines, truncate)
-		response = strings.ReplaceAll(response, "\n", " ")
-		maxLen := m.width - 5
-		if maxLen > 0 && len(response) > maxLen {
-			response = response[:maxLen-3] + "..."
-		}
-		return prefix + " " + ReadyStyle.Render("󱐏 ") + response
-	}
-	
-	if m.viewMode == ChatMode {
-		return prefix + " " + m.chatInput.View()
-	}
-	return prefix + " " + SearchInputStyle.Render(m.chatInput.Placeholder)
+// =============================================================================
+// EXTERNAL COMMANDS
+// =============================================================================
+
+func openInEditorCmd(projectPath, file string) tea.Cmd {
+	return tea.ExecProcess(
+		func() *exec.Cmd {
+			expanded := expandPath(projectPath)
+			if file != "" {
+				return exec.Command("nvim", filepath.Join(expanded, file))
+			}
+			cmd := exec.Command("nvim", ".")
+			cmd.Dir = expanded
+			return cmd
+		}(),
+		nil,
+	)
 }
 
-func (m Model) renderBottomStatus() string {
-	status := fmt.Sprintf(" %d projects  %d%s  %d%s  %d%s  %d%s  %d%s",
-		m.stats.TotalProjects,
-		m.stats.TotalFiles, FilesIcon,
-		m.stats.TotalUntracked, UntrackedIcon,
-		m.stats.TotalModified, ModifiedIcon,
-		m.stats.TotalIssues, IssuesIcon,
-		m.stats.TotalPRs, PRsIcon)
-	
-	return BottomStatusStyle.Render(status)
+func openLazygitCmd(projectPath string) tea.Cmd {
+	return tea.ExecProcess(
+		func() *exec.Cmd {
+			expanded := expandPath(projectPath)
+			cmd := exec.Command("lazygit")
+			cmd.Dir = expanded
+			return cmd
+		}(),
+		nil,
+	)
+}
+
+func openProductionCmd(projectName string) tea.Cmd {
+	return tea.ExecProcess(
+		exec.Command("open", fmt.Sprintf("https://%s", projectName)),
+		nil,
+	)
+}
+
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, path[2:])
+	}
+	return path
 }
 
 func min(a, b int) int {
@@ -844,7 +1059,7 @@ func min(a, b int) int {
 	return b
 }
 
-func max(a, b int) int {
+func maxInt(a, b int) int {
 	if a > b {
 		return a
 	}

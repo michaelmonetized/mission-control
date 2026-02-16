@@ -2,10 +2,12 @@ package discover
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Project represents a discovered project
@@ -270,6 +272,39 @@ func getVercelStatusDirect(expandedPath string) (string, error) {
 	}
 	
 	return "ready", nil
+}
+
+// GetGitTimes returns the first commit time (project age) and last commit time
+func GetGitTimes(projectPath string) (firstCommit, lastCommit time.Time) {
+	expandedPath := expandPath(projectPath)
+
+	// Check if it's a git repo
+	gitDir := filepath.Join(expandedPath, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		return time.Time{}, time.Time{}
+	}
+
+	// Get first commit time (oldest)
+	cmd := exec.Command("git", "-C", expandedPath, "log", "--reverse", "--format=%ct", "-1")
+	output, err := cmd.Output()
+	if err == nil {
+		var ts int64
+		if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%d", &ts); err == nil {
+			firstCommit = time.Unix(ts, 0)
+		}
+	}
+
+	// Get last commit time (newest)
+	cmd = exec.Command("git", "-C", expandedPath, "log", "-1", "--format=%ct")
+	output, err = cmd.Output()
+	if err == nil {
+		var ts int64
+		if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%d", &ts); err == nil {
+			lastCommit = time.Unix(ts, 0)
+		}
+	}
+
+	return firstCommit, lastCommit
 }
 
 // expandPath expands ~ to home directory
