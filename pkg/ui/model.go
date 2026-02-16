@@ -152,14 +152,38 @@ type chatResponseMsg struct {
 // MODEL
 // =============================================================================
 
+// ButtonAction represents a clickable action
+type ButtonAction int
+
+const (
+	ActionNone ButtonAction = iota
+	ActionPush
+	ActionMerge
+	ActionRun
+	ActionDeploy
+	ActionReadme
+	ActionRoadmap
+	ActionPlan
+	ActionTodo
+	ActionChat
+)
+
+// ButtonBounds tracks clickable button regions
+type ButtonBounds struct {
+	StartX int
+	EndX   int
+	Action ButtonAction
+	Row    int // which project row (relative to scroll)
+}
+
 type Model struct {
 	projects []Project
 	filtered []Project
 	stats    Stats
 
-	selectedIdx int
+	selectedIdx  int
 	scrollOffset int
-	viewMode    ViewMode
+	viewMode     ViewMode
 
 	currentProject *Project
 
@@ -182,6 +206,10 @@ type Model struct {
 	chatResponse string
 	chatLoading  bool
 	chatError    string
+
+	// Clickable buttons
+	buttonBounds []ButtonBounds
+	listStartY   int // Y offset where project list starts
 }
 
 // =============================================================================
@@ -301,6 +329,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -704,6 +735,114 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Only handle left clicks
+	if msg.Type != tea.MouseLeft {
+		return m, nil
+	}
+
+	// Check if click is in project list area
+	// List starts at Y=3 (after top status + search box)
+	listStartY := 3
+	listHeight := m.getListHeight()
+
+	if msg.Y >= listStartY && msg.Y < listStartY+listHeight {
+		// Calculate which row was clicked
+		clickedRow := msg.Y - listStartY
+		projectIdx := m.scrollOffset + clickedRow
+
+		if projectIdx < len(m.filtered) {
+			// Check if click is on an action button
+			for _, btn := range m.buttonBounds {
+				if btn.Row == clickedRow && msg.X >= btn.StartX && msg.X < btn.EndX {
+					p := m.filtered[projectIdx]
+					return m.executeAction(btn.Action, p)
+				}
+			}
+
+			// Otherwise, select the row
+			m.selectedIdx = projectIdx
+		}
+	}
+
+	return m, nil
+}
+
+func (m Model) executeAction(action ButtonAction, p Project) (tea.Model, tea.Cmd) {
+	expandedPath := expandPath(p.Path)
+
+	switch action {
+	case ActionPush:
+		// Git push
+		return m, tea.ExecProcess(
+			func() *exec.Cmd {
+				cmd := exec.Command("git", "push")
+				cmd.Dir = expandedPath
+				return cmd
+			}(),
+			nil,
+		)
+
+	case ActionMerge:
+		// Open PR merge in browser via gh
+		return m, tea.ExecProcess(
+			func() *exec.Cmd {
+				cmd := exec.Command("gh", "pr", "view", "--web")
+				cmd.Dir = expandedPath
+				return cmd
+			}(),
+			nil,
+		)
+
+	case ActionRun:
+		// Run dev server (npm/bun run dev)
+		return m, tea.ExecProcess(
+			func() *exec.Cmd {
+				cmd := exec.Command("bun", "run", "dev")
+				cmd.Dir = expandedPath
+				return cmd
+			}(),
+			nil,
+		)
+
+	case ActionDeploy:
+		// Vercel deploy
+		return m, tea.ExecProcess(
+			func() *exec.Cmd {
+				cmd := exec.Command("vercel", "--prod")
+				cmd.Dir = expandedPath
+				return cmd
+			}(),
+			nil,
+		)
+
+	case ActionReadme:
+		return m, openInEditorCmd(p.Path, "README.md")
+
+	case ActionRoadmap:
+		return m, openInEditorCmd(p.Path, "ROADMAP.md")
+
+	case ActionPlan:
+		return m, openInEditorCmd(p.Path, "PLAN.md")
+
+	case ActionTodo:
+		return m, openInEditorCmd(p.Path, "TODO.md")
+
+	case ActionChat:
+		// Open OpenClaw in project
+		return m, tea.ExecProcess(
+			func() *exec.Cmd {
+				cmd := exec.Command("openclaw")
+				cmd.Dir = expandedPath
+				return cmd
+			}(),
+			nil,
+		)
+	}
+
+	return m, nil
+}
+
 func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
@@ -851,7 +990,7 @@ func (m Model) renderSearchBox() string {
 // PROJECT LIST (Striped with scrollbar)
 // =============================================================================
 
-func (m Model) renderProjectList(height int) string {
+func (m *Model) renderProjectList(height int) string {
 	if m.viewMode == HelpMode {
 		return m.renderHelp(height)
 	}
@@ -862,12 +1001,16 @@ func (m Model) renderProjectList(height int) string {
 	var rows []string
 	listWidth := m.width - 3 // Leave room for scrollbar
 
+	// Clear button bounds for fresh calculation
+	m.buttonBounds = nil
+
 	for i := m.scrollOffset; i < len(m.filtered) && i < m.scrollOffset+height; i++ {
 		p := m.filtered[i]
 		isSelected := i == m.selectedIdx
 		isOdd := (i-m.scrollOffset)%2 == 1
+		rowNum := i - m.scrollOffset
 
-		row := m.renderProjectRow(p, i, listWidth, isOdd, isSelected)
+		row := m.renderProjectRow(p, i, listWidth, isOdd, isSelected, rowNum)
 		rows = append(rows, row)
 	}
 
@@ -892,7 +1035,7 @@ func (m Model) renderProjectList(height int) string {
 	return result.String()
 }
 
-func (m Model) renderProjectRow(p Project, idx int, width int, isOdd bool, isSelected bool) string {
+func (m *Model) renderProjectRow(p Project, idx int, width int, isOdd bool, isSelected bool, rowNum int) string {
 	// Type icon based on detected language/type
 	typeIcon := getTypeIcon(p.Type)
 
@@ -906,10 +1049,32 @@ func (m Model) renderProjectRow(p Project, idx int, width int, isOdd bool, isSel
 	seg3 := fmt.Sprintf(" %s%-2d %s%-2d %s%-2d ", IconStaged, p.Staged, IconUntracked, p.Untracked, IconModified, p.Modified)
 	seg4 := fmt.Sprintf(" %s%-2d %s%-2d", IconIssue, p.Issues, IconPR, p.PRs)
 	
-	// Action buttons
-	actions := fmt.Sprintf(" %s %s %s %s %s %s %s %s %s",
-		IconPush, IconMerge, IconPlayPause, IconDeploy,
-		IconReadme, IconRoadmap, IconPlan, IconTodo, IconChat)
+	// Action buttons - track positions for click handling
+	buttonIcons := []struct {
+		icon   string
+		action ButtonAction
+	}{
+		{IconPush, ActionPush},
+		{IconMerge, ActionMerge},
+		{IconPlayPause, ActionRun},
+		{IconDeploy, ActionDeploy},
+		{IconReadme, ActionReadme},
+		{IconRoadmap, ActionRoadmap},
+		{IconPlan, ActionPlan},
+		{IconTodo, ActionTodo},
+		{IconChat, ActionChat},
+	}
+
+	// Build actions string
+	var actionsBuilder strings.Builder
+	actionsBuilder.WriteString(" ")
+	for i, btn := range buttonIcons {
+		actionsBuilder.WriteString(btn.icon)
+		if i < len(buttonIcons)-1 {
+			actionsBuilder.WriteString(" ")
+		}
+	}
+	actions := actionsBuilder.String()
 
 	// Combine content
 	content := seg1 + seg2 + seg3 + seg4
@@ -920,6 +1085,21 @@ func (m Model) renderProjectRow(p Project, idx int, width int, isOdd bool, isSel
 	gap := width - contentWidth - actionsWidth
 	if gap < 0 {
 		gap = 0
+	}
+
+	// Calculate button X positions (after gap)
+	buttonsStartX := contentWidth + gap + 1 // +1 for leading space
+	currentX := buttonsStartX
+	
+	for _, btn := range buttonIcons {
+		iconWidth := lipgloss.Width(btn.icon)
+		m.buttonBounds = append(m.buttonBounds, ButtonBounds{
+			StartX: currentX,
+			EndX:   currentX + iconWidth,
+			Action: btn.action,
+			Row:    rowNum,
+		})
+		currentX += iconWidth + 1 // +1 for space between icons
 	}
 
 	// Build full row with padding to exact width
