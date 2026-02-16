@@ -12,8 +12,15 @@ OUTPUT_JSON=false
 cd "$PROJECT_PATH" 2>/dev/null || { echo '{"error":"invalid path"}'; exit 1; }
 
 # Check if Swift project
-if [[ ! -f "Package.swift" ]] && ! ls *.xcodeproj &>/dev/null 2>&1; then
-  [[ "$OUTPUT_JSON" == true ]] && echo '{"error":"not a swift project"}' || echo "none"
+buildable=false
+if [[ -f "Package.swift" ]]; then
+  buildable=true
+elif ls *.xcodeproj &>/dev/null 2>&1; then
+  buildable=true
+fi
+
+if [[ "$buildable" == false ]]; then
+  [[ "$OUTPUT_JSON" == true ]] && echo '{"buildable":false,"state":"none","last_build":""}' || echo "none"
   exit 0
 fi
 
@@ -28,9 +35,7 @@ if [[ -d "$build_dir" ]]; then
     state="success"
   fi
   # Get last build time
-  if [[ -d "$build_dir" ]]; then
-    last_build=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$build_dir" 2>/dev/null || echo "")
-  fi
+  last_build=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$build_dir" 2>/dev/null || echo "")
 else
   state="none"
 fi
@@ -44,12 +49,7 @@ if [[ -f "$error_log" ]]; then
 fi
 
 if [[ "$OUTPUT_JSON" == true ]]; then
-  cat <<EOF
-{
-  "state": "$state",
-  "last_build": "$last_build"
-}
-EOF
+  echo "{\"buildable\":true,\"state\":\"$state\",\"last_build\":\"$last_build\"}"
 else
   echo -e "$state\t$last_build"
 fi

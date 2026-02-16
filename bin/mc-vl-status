@@ -13,28 +13,27 @@ cd "$PROJECT_PATH" 2>/dev/null || { echo '{"error":"invalid path"}'; exit 1; }
 
 # Check if Vercel project
 if [[ ! -d ".vercel" ]]; then
-  [[ "$OUTPUT_JSON" == true ]] && echo '{"error":"not a vercel project"}' || echo "none	none"
+  [[ "$OUTPUT_JSON" == true ]] && echo '{"state":"none","url":""}' || echo "none	none"
   exit 0
 fi
 
-# Check if vercel/vl available
+# Check if vercel available
 if ! command -v vercel &>/dev/null; then
-  [[ "$OUTPUT_JSON" == true ]] && echo '{"error":"vercel not installed"}' || echo "unknown	unknown"
+  [[ "$OUTPUT_JSON" == true ]] && echo '{"state":"unknown","url":""}' || echo "unknown	unknown"
   exit 0
 fi
 
-# Get latest deployment status
-deployment=$(vercel ls --limit 1 2>/dev/null | tail -n +2 | head -1 || echo "")
+# Get latest deployment status via JSON
+deployment=$(vercel ls --json -n 1 2>/dev/null || echo "[]")
 
-if [[ -z "$deployment" ]]; then
+if [[ "$deployment" == "[]" ]] || [[ -z "$deployment" ]]; then
   [[ "$OUTPUT_JSON" == true ]] && echo '{"state":"none","url":""}' || echo "none	"
   exit 0
 fi
 
-# Parse deployment line
-# Format: project-name url state age
-state=$(echo "$deployment" | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
-url=$(echo "$deployment" | awk '{print $2}')
+# Parse JSON
+state=$(echo "$deployment" | jq -r '.[0].state // "unknown"' | tr '[:upper:]' '[:lower:]')
+url=$(echo "$deployment" | jq -r '.[0].url // ""')
 
 # Normalize state
 case "$state" in
@@ -46,12 +45,7 @@ case "$state" in
 esac
 
 if [[ "$OUTPUT_JSON" == true ]]; then
-  cat <<EOF
-{
-  "state": "$state",
-  "url": "$url"
-}
-EOF
+  echo "{\"state\":\"$state\",\"url\":\"$url\"}"
 else
   echo -e "$state\t$url"
 fi

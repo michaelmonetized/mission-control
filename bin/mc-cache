@@ -5,6 +5,7 @@
 
 set -euo pipefail
 
+BIN_DIR="$(dirname "$0")"
 CACHE_DIR="$HOME/.hustlemc"
 PROJECTS_CACHE="$CACHE_DIR/projects.json"
 STATUS_CACHE="$CACHE_DIR/status.json"
@@ -52,7 +53,7 @@ case "$cmd" in
   refresh)
     # Refresh all caches
     echo "Refreshing project list..."
-    mc-discover --json > "$PROJECTS_CACHE"
+    "$BIN_DIR/mc-discover" "$HOME/Projects" --json > "$PROJECTS_CACHE"
     
     echo "Refreshing status cache..."
     projects=$(cat "$PROJECTS_CACHE")
@@ -66,12 +67,12 @@ case "$cmd" in
       
       echo "  $name..."
       
-      git_status=$(mc-git-status "$path" --json 2>/dev/null || echo '{}')
-      gh_status=$(mc-gh-status "$path" --json 2>/dev/null || echo '{}')
+      git_status=$("$BIN_DIR/mc-git-status" "$path" --json 2>/dev/null || echo '{}')
+      gh_status=$("$BIN_DIR/mc-gh-status" "$path" --json 2>/dev/null || echo '{}')
       
       case "$type" in
-        vercel) deploy_status=$(mc-vl-status "$path" --json 2>/dev/null || echo '{}') ;;
-        swift) deploy_status=$(mc-swift-status "$path" --json 2>/dev/null || echo '{}') ;;
+        vercel) deploy_status=$("$BIN_DIR/mc-vl-status" "$path" --json 2>/dev/null || echo '{}') ;;
+        swift) deploy_status=$("$BIN_DIR/mc-swift-status" "$path" --json 2>/dev/null || echo '{}') ;;
         *) deploy_status='{}' ;;
       esac
       

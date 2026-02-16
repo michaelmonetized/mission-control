@@ -72,7 +72,7 @@ func RunDiscovery() error {
 	return cmd.Run()
 }
 
-// GetGitStatus returns git status for a project
+// GetGitStatus returns git status for a project using mc-git-status script
 func GetGitStatus(projectPath string) (*GitStatus, error) {
 	expandedPath := expandPath(projectPath)
 	
@@ -82,9 +82,43 @@ func GetGitStatus(projectPath string) (*GitStatus, error) {
 		return nil, nil
 	}
 	
+	// Use mc-git-status script
+	home, _ := os.UserHomeDir()
+	binPath := filepath.Join(home, "Projects", "mission-control", "bin", "mc-git-status")
+	
+	cmd := exec.Command(binPath, expandedPath, "--json")
+	output, err := cmd.Output()
+	if err != nil {
+		// Fallback to direct git
+		return getGitStatusDirect(expandedPath)
+	}
+	
+	var result struct {
+		Branch    string `json:"branch"`
+		Untracked int    `json:"untracked"`
+		Modified  int    `json:"modified"`
+		Staged    int    `json:"staged"`
+		Ahead     int    `json:"ahead"`
+		Behind    int    `json:"behind"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return getGitStatusDirect(expandedPath)
+	}
+	
+	return &GitStatus{
+		Branch:    result.Branch,
+		Untracked: result.Untracked,
+		Modified:  result.Modified,
+		Staged:    result.Staged,
+		Ahead:     result.Ahead,
+		Behind:    result.Behind,
+	}, nil
+}
+
+// getGitStatusDirect is a fallback using git directly
+func getGitStatusDirect(expandedPath string) (*GitStatus, error) {
 	status := &GitStatus{}
 	
-	// Get porcelain status
 	cmd := exec.Command("git", "-C", expandedPath, "status", "--porcelain", "-b")
 	output, err := cmd.Output()
 	if err != nil {
@@ -94,14 +128,8 @@ func GetGitStatus(projectPath string) (*GitStatus, error) {
 	lines := strings.Split(string(output), "\n")
 	for i, line := range lines {
 		if i == 0 && strings.HasPrefix(line, "## ") {
-			// Parse branch line: ## main...origin/main [ahead 2, behind 1]
 			parts := strings.Split(line[3:], "...")
 			status.Branch = parts[0]
-			if len(parts) > 1 {
-				if strings.Contains(parts[1], "[ahead") {
-					// Parse ahead/behind
-				}
-			}
 			continue
 		}
 		
@@ -126,13 +154,38 @@ func GetGitStatus(projectPath string) (*GitStatus, error) {
 	return status, nil
 }
 
-// GetGitHubStatus returns GitHub status (issues/PRs) for a project
+// GetGitHubStatus returns GitHub status (issues/PRs) for a project using mc-gh-status script
 func GetGitHubStatus(projectPath string) (*GitHubStatus, error) {
 	expandedPath := expandPath(projectPath)
 	
+	// Use mc-gh-status script
+	home, _ := os.UserHomeDir()
+	binPath := filepath.Join(home, "Projects", "mission-control", "bin", "mc-gh-status")
+	
+	cmd := exec.Command(binPath, expandedPath, "--json")
+	output, err := cmd.Output()
+	if err != nil {
+		return getGitHubStatusDirect(expandedPath)
+	}
+	
+	var result struct {
+		Issues int `json:"issues"`
+		PRs    int `json:"prs"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return getGitHubStatusDirect(expandedPath)
+	}
+	
+	return &GitHubStatus{
+		Issues: result.Issues,
+		PRs:    result.PRs,
+	}, nil
+}
+
+// getGitHubStatusDirect is a fallback using gh directly
+func getGitHubStatusDirect(expandedPath string) (*GitHubStatus, error) {
 	status := &GitHubStatus{}
 	
-	// Get open issues count
 	cmd := exec.Command("gh", "issue", "list", "--state", "open", "--json", "number", "-q", "length")
 	cmd.Dir = expandedPath
 	output, err := cmd.Output()
@@ -142,7 +195,6 @@ func GetGitHubStatus(projectPath string) (*GitHubStatus, error) {
 		status.Issues = count
 	}
 	
-	// Get open PRs count
 	cmd = exec.Command("gh", "pr", "list", "--state", "open", "--json", "number", "-q", "length")
 	cmd.Dir = expandedPath
 	output, err = cmd.Output()
@@ -155,7 +207,7 @@ func GetGitHubStatus(projectPath string) (*GitHubStatus, error) {
 	return status, nil
 }
 
-// GetVercelStatus returns the latest deployment status
+// GetVercelStatus returns the latest deployment status using mc-vl-status script
 func GetVercelStatus(projectPath string) (string, error) {
 	expandedPath := expandPath(projectPath)
 	
@@ -165,7 +217,28 @@ func GetVercelStatus(projectPath string) (string, error) {
 		return "", nil
 	}
 	
-	// Get latest deployment
+	// Use mc-vl-status script
+	home, _ := os.UserHomeDir()
+	binPath := filepath.Join(home, "Projects", "mission-control", "bin", "mc-vl-status")
+	
+	cmd := exec.Command(binPath, expandedPath, "--json")
+	output, err := cmd.Output()
+	if err != nil {
+		return getVercelStatusDirect(expandedPath)
+	}
+	
+	var result struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return getVercelStatusDirect(expandedPath)
+	}
+	
+	return result.State, nil
+}
+
+// getVercelStatusDirect is a fallback using vercel directly
+func getVercelStatusDirect(expandedPath string) (string, error) {
 	cmd := exec.Command("vercel", "ls", "--json", "-n", "1")
 	cmd.Dir = expandedPath
 	output, err := cmd.Output()
@@ -173,7 +246,6 @@ func GetVercelStatus(projectPath string) (string, error) {
 		return "unknown", nil
 	}
 	
-	// Parse JSON output
 	var deployments []struct {
 		State string `json:"state"`
 	}

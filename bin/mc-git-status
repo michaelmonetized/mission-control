@@ -3,7 +3,7 @@
 # Usage: mc-git-status <project_path> [--json]
 # Output: JSON object with counts or tab-separated values
 
-set -euo pipefail
+set -uo pipefail
 
 PROJECT_PATH="${1:-.}"
 OUTPUT_JSON=false
@@ -16,30 +16,40 @@ if [[ ! -d ".git" ]]; then
   if [[ "$OUTPUT_JSON" == true ]]; then
     echo '{"error":"not a git repo"}'
   else
-    echo "0	0	0"
+    echo "0	0	0	0	0	"
   fi
   exit 0
 fi
 
-# Get status counts
-untracked=$(git status --porcelain 2>/dev/null | grep -c "^??" 2>/dev/null || true)
-untracked=${untracked:-0}
-modified=$(git status --porcelain 2>/dev/null | grep -c "^.M\|^M.\|^A.\|^D." 2>/dev/null || true)
-modified=${modified:-0}
-total_files=$(git ls-files 2>/dev/null | wc -l | tr -d ' ')
-commits_ahead=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo 0)
+# Get branch
 branch=$(git branch --show-current 2>/dev/null || echo "detached")
 
+# Get status counts using awk for reliability
+porcelain=$(git status --porcelain 2>/dev/null || true)
+
+untracked=0
+modified=0
+staged=0
+
+if [[ -n "$porcelain" ]]; then
+  # Count untracked
+  untracked=$(echo "$porcelain" | awk '/^\?\?/ {count++} END {print count+0}')
+  # Count modified (workspace)
+  modified=$(echo "$porcelain" | awk '/^ [MD]|^[AMD] [MD]/ {count++} END {print count+0}')
+  # Count staged
+  staged=$(echo "$porcelain" | awk '/^[MADRC]/ {count++} END {print count+0}')
+fi
+
+# Get ahead/behind
+ahead=0
+behind=0
+if git rev-parse --abbrev-ref @{u} &>/dev/null; then
+  ahead=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
+  behind=$(git rev-list --count HEAD..@{u} 2>/dev/null || echo "0")
+fi
+
 if [[ "$OUTPUT_JSON" == true ]]; then
-  cat <<EOF
-{
-  "untracked": $untracked,
-  "modified": $modified,
-  "total_files": $total_files,
-  "commits_ahead": $commits_ahead,
-  "branch": "$branch"
-}
-EOF
+  echo "{\"branch\":\"$branch\",\"untracked\":$untracked,\"modified\":$modified,\"staged\":$staged,\"ahead\":$ahead,\"behind\":$behind}"
 else
-  echo -e "$untracked\t$modified\t$total_files\t$commits_ahead\t$branch"
+  echo -e "$untracked\t$modified\t$staged\t$ahead\t$behind\t$branch"
 fi
