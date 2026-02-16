@@ -274,6 +274,34 @@ func getVercelStatusDirect(expandedPath string) (string, error) {
 	return "ready", nil
 }
 
+// GetPrimaryLanguage uses mc-tokei-lang-perc to detect the primary language
+func GetPrimaryLanguage(projectPath string) string {
+	expandedPath := expandPath(projectPath)
+
+	home, _ := os.UserHomeDir()
+	binPath := filepath.Join(home, "Projects", "mission-control", "bin", "mc-tokei-lang-perc")
+
+	cmd := exec.Command(binPath, expandedPath)
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	// Output format: "Language: NN%"
+	result := strings.TrimSpace(string(output))
+	if result == "" || result == "null: null%" {
+		return ""
+	}
+
+	// Extract just the language name
+	parts := strings.Split(result, ":")
+	if len(parts) > 0 {
+		return strings.TrimSpace(parts[0])
+	}
+
+	return ""
+}
+
 // GetGitTimes returns the first commit time (project age) and last commit time
 func GetGitTimes(projectPath string) (firstCommit, lastCommit time.Time) {
 	expandedPath := expandPath(projectPath)

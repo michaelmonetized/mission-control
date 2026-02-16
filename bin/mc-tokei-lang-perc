@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+tokei --output json "$@" | jq -r 'del(.Total) | map_values(.code) | with_entries(select(.value > 0)) | add as $t | to_entries | map(.value |= (. * 100 / $t | floor)) | max_by(.value) | "\(.key): \(.value)%"'

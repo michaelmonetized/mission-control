@@ -23,22 +23,38 @@ import (
 type ProjectType string
 
 const (
-	TypeVercel ProjectType = "vercel"
-	TypeSwift  ProjectType = "swift"
-	TypeCLI    ProjectType = "cli"
-	TypeGit    ProjectType = "git"
+	TypeVercel    ProjectType = "vercel"
+	TypeSwift     ProjectType = "swift"
+	TypeGo        ProjectType = "go"
+	TypeC         ProjectType = "c"
+	TypePython    ProjectType = "python"
+	TypeRuby      ProjectType = "ruby"
+	TypeRust      ProjectType = "rust"
+	TypeLua       ProjectType = "lua"
+	TypeHTML      ProjectType = "html"
+	TypeCSS       ProjectType = "css"
+	TypePHP       ProjectType = "php"
+	TypeJava      ProjectType = "java"
+	TypeWordPress ProjectType = "wordpress"
+	TypeTerminal  ProjectType = "terminal"  // bash/zsh/dotfiles
+	TypeChrome    ProjectType = "chrome"    // browser extensions
+	TypeDocker    ProjectType = "docker"
+	TypeMarkdown  ProjectType = "markdown"
+	TypeJSON      ProjectType = "json"
+	TypeGit       ProjectType = "git"       // fallback
 )
 
 // Project represents a discovered project with all stats
 type Project struct {
-	Name string
-	Path string
-	Type ProjectType
+	Name     string
+	Path     string
+	Type     ProjectType
+	Language string // Primary language detected by tokei
 
 	// Time-based stats
-	LastBuildTime  time.Time // Last Vercel/Swift build
-	FirstCommit    time.Time // Project age
-	LastCommit     time.Time // Time since last commit
+	LastBuildTime time.Time // Last Vercel/Swift build
+	FirstCommit   time.Time // Project age
+	LastCommit    time.Time // Time since last commit
 
 	// Git status
 	Staged    int
@@ -120,6 +136,11 @@ type gitTimesMsg struct {
 	name        string
 	firstCommit time.Time
 	lastCommit  time.Time
+}
+
+type languageMsg struct {
+	name     string
+	language string
 }
 
 type chatResponseMsg struct {
@@ -255,6 +276,13 @@ func loadGitTimesCmd(name, path string) tea.Cmd {
 	}
 }
 
+func loadLanguageCmd(name, path string) tea.Cmd {
+	return func() tea.Msg {
+		lang := discover.GetPrimaryLanguage(path)
+		return languageMsg{name: name, language: lang}
+	}
+}
+
 func sendChatCmd(client *openclaw.Client, message, cwd string) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
@@ -290,6 +318,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, p := range m.projects {
 			cmds = append(cmds, loadGitStatusCmd(p.Name, p.Path))
 			cmds = append(cmds, loadGitTimesCmd(p.Name, p.Path))
+			cmds = append(cmds, loadLanguageCmd(p.Name, p.Path))
 			if p.Type == TypeVercel {
 				cmds = append(cmds, loadVercelStatusCmd(p.Name, p.Path))
 			}
@@ -337,6 +366,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.projects[i].Name == msg.name {
 				m.projects[i].FirstCommit = msg.firstCommit
 				m.projects[i].LastCommit = msg.lastCommit
+				break
+			}
+		}
+		m.syncFiltered()
+		return m, nil
+
+	case languageMsg:
+		for i := range m.projects {
+			if m.projects[i].Name == msg.name {
+				m.projects[i].Language = msg.language
+				m.projects[i].Type = detectProjectType(m.projects[i])
 				break
 			}
 		}
@@ -397,6 +437,87 @@ func (m *Model) syncFiltered() {
 			}
 		}
 	}
+}
+
+// detectProjectType determines project type from language, path, and markers
+func detectProjectType(p Project) ProjectType {
+	name := strings.ToLower(p.Name)
+	lang := strings.ToLower(p.Language)
+
+	// Check for specific project markers first
+	expandedPath := expandPath(p.Path)
+
+	// Vercel project
+	if _, err := os.Stat(filepath.Join(expandedPath, ".vercel")); err == nil {
+		return TypeVercel
+	}
+
+	// Swift project
+	if _, err := os.Stat(filepath.Join(expandedPath, "Package.swift")); err == nil {
+		return TypeSwift
+	}
+
+	// WordPress
+	if strings.Contains(name, "wordpress") || strings.Contains(name, "wp-") {
+		return TypeWordPress
+	}
+	if _, err := os.Stat(filepath.Join(expandedPath, "wp-config.php")); err == nil {
+		return TypeWordPress
+	}
+
+	// Browser extension
+	if strings.Contains(name, "extension") || strings.Contains(name, "chrome") {
+		return TypeChrome
+	}
+	if _, err := os.Stat(filepath.Join(expandedPath, "manifest.json")); err == nil {
+		// Check if it looks like a browser extension manifest
+		return TypeChrome
+	}
+
+	// Dotfiles / terminal
+	if name == "dotfiles" || strings.HasPrefix(name, ".") || strings.Contains(name, "zsh") || strings.Contains(name, "bash") {
+		return TypeTerminal
+	}
+
+	// Docker
+	if _, err := os.Stat(filepath.Join(expandedPath, "Dockerfile")); err == nil {
+		return TypeDocker
+	}
+
+	// Language-based detection from tokei
+	switch {
+	case strings.Contains(lang, "go"):
+		return TypeGo
+	case strings.Contains(lang, "c") && !strings.Contains(lang, "css"):
+		if lang == "c" || strings.HasPrefix(lang, "c ") {
+			return TypeC
+		}
+	case strings.Contains(lang, "python"):
+		return TypePython
+	case strings.Contains(lang, "ruby"):
+		return TypeRuby
+	case strings.Contains(lang, "rust"):
+		return TypeRust
+	case strings.Contains(lang, "lua"):
+		return TypeLua
+	case strings.Contains(lang, "html"):
+		return TypeHTML
+	case strings.Contains(lang, "css"):
+		return TypeCSS
+	case strings.Contains(lang, "php"):
+		return TypePHP
+	case strings.Contains(lang, "java") && !strings.Contains(lang, "javascript"):
+		return TypeJava
+	case strings.Contains(lang, "markdown"):
+		return TypeMarkdown
+	case strings.Contains(lang, "json"):
+		return TypeJSON
+	case strings.Contains(lang, "tsx"), strings.Contains(lang, "typescript"), strings.Contains(lang, "javascript"):
+		// TSX/TS/JS projects without .vercel are still web projects
+		return TypeVercel
+	}
+
+	return TypeGit // fallback
 }
 
 // =============================================================================
@@ -782,16 +903,8 @@ func (m Model) renderProjectList(height int) string {
 }
 
 func (m Model) renderProjectRow(p Project, idx int, width int) string {
-	// Type icon
-	var typeIcon string
-	switch p.Type {
-	case TypeVercel:
-		typeIcon = IconVercel
-	case TypeSwift:
-		typeIcon = IconSwift
-	default:
-		typeIcon = IconGit
-	}
+	// Type icon based on detected language/type
+	typeIcon := getTypeIcon(p.Type)
 
 	// State color for type icon
 	typeStyle := lipgloss.NewStyle()
@@ -806,18 +919,17 @@ func (m Model) renderProjectRow(p Project, idx int, width int) string {
 		typeStyle = typeStyle.Foreground(ColorGray)
 	}
 
-	// Time formatting
-	lastBuild := formatTimeSince(p.LastBuildTime)
+	// Time formatting with icons
 	projectAge := formatTimeSince(p.FirstCommit)
 	lastCommit := formatTimeSince(p.LastCommit)
 
-	// Build row: icon | name | times | git stats | gh stats | actions
-	row := fmt.Sprintf("%s %-18s %4s %4s %4s  %s%-2d %s%-2d %s%-2d  %s%-2d %s%-2d",
+	// Build row: icon | name | age times | git stats | gh stats | actions
+	// Using IconCommitStart for project age (first commit) and IconCommitEnd for last commit
+	row := fmt.Sprintf("%s %-18s %s%4s %s%4s  %s%-2d %s%-2d %s%-2d  %s%-2d %s%-2d",
 		typeStyle.Render(typeIcon),
 		truncate(p.Name, 18),
-		lastBuild,
-		projectAge,
-		lastCommit,
+		IconCommitStart, projectAge,
+		IconCommitEnd, lastCommit,
 		IconStaged, p.Staged,
 		IconUntracked, p.Untracked,
 		IconModified, p.Modified,
@@ -843,6 +955,50 @@ func (m Model) renderProjectRow(p Project, idx int, width int) string {
 	}
 
 	return row
+}
+
+// getTypeIcon returns the appropriate icon for a project type
+func getTypeIcon(t ProjectType) string {
+	switch t {
+	case TypeVercel:
+		return IconVercel
+	case TypeSwift:
+		return IconSwift
+	case TypeGo:
+		return IconTypeGo
+	case TypeC:
+		return IconTypeC
+	case TypePython:
+		return IconTypePython
+	case TypeRuby:
+		return IconTypeRuby
+	case TypeRust:
+		return IconTypeRust
+	case TypeLua:
+		return IconTypeLua
+	case TypeHTML:
+		return IconTypeHTML
+	case TypeCSS:
+		return IconTypeCss
+	case TypePHP:
+		return IconTypePhp
+	case TypeJava:
+		return IconTypeJava
+	case TypeWordPress:
+		return IconTypeWordPress
+	case TypeTerminal:
+		return IconTypeTerminal
+	case TypeChrome:
+		return IconTypeChrome
+	case TypeDocker:
+		return IconTypeDocker
+	case TypeMarkdown:
+		return IconTypeMarkdown
+	case TypeJSON:
+		return IconTypeJson
+	default:
+		return IconTypeDefault
+	}
 }
 
 func formatTimeSince(t time.Time) string {

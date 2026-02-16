@@ -99,6 +99,30 @@ const (
 	// Misc
 	IconSearch = "\uf422" // U+F422 oct-search
 	IconTime   = "\uf43a" // U+F43A oct-clock
+
+	// Time/commit icons
+	IconCommitStart = "\U000f071d" // U+F071D md-source_commit_start (first commit/project age)
+	IconCommitEnd   = "\U000f0719" // U+F0719 md-source_commit_end (last commit)
+
+	// Language/project type icons
+	IconTypeC          = "\ue771" // U+E771 dev-c
+	IconTypeGo         = "\ue724" // U+E724 dev-go
+	IconTypeTerminal   = "\ue795" // U+E795 dev-terminal (bash/zsh/dotfiles)
+	IconTypeChrome     = "\ue743" // U+E743 dev-chrome (browser extensions)
+	IconTypeLua        = "\ue826" // U+E826 dev-lua
+	IconTypeHTML       = "\ue736" // U+E736 dev-html5
+	IconTypeWordPress  = "\ue70b" // U+E70B dev-wordpress
+	IconTypePython     = "\ue73c" // U+E73C dev-python
+	IconTypeRuby       = "\ue791" // U+E791 dev-ruby
+	IconTypeRust       = "\ue7a8" // U+E7A8 dev-rust
+	IconTypeJava       = "\ue738" // U+E738 dev-java
+	IconTypePhp        = "\ue73d" // U+E73D dev-php
+	IconTypeMarkdown   = "\ue73e" // U+E73E dev-markdown
+	IconTypeJson       = "\ue60b" // U+E60B seti-json
+	IconTypeYaml       = "\ue60b" // U+E60B seti-json (similar)
+	IconTypeCss        = "\ue749" // U+E749 dev-css3
+	IconTypeDocker     = "\ue7b0" // U+E7B0 dev-docker
+	IconTypeDefault    = "\uf121" // U+F121 fa-code
 )
 
 // =============================================================================
