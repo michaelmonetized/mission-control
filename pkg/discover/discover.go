@@ -33,10 +33,81 @@ type GitHubStatus struct {
 	PRs    int
 }
 
-// CacheDir returns the cache directory path
+// ProjectCache holds cached status for a project
+type ProjectCache struct {
+	UpdatedAt   time.Time   `json:"updated_at"`
+	Language    string      `json:"language,omitempty"`
+	GitStatus   *GitStatus  `json:"git_status,omitempty"`
+	GHStatus    *GitHubStatus `json:"gh_status,omitempty"`
+	VercelState string      `json:"vercel_state,omitempty"`
+	FirstCommit int64       `json:"first_commit,omitempty"` // Unix timestamp
+	LastCommit  int64       `json:"last_commit,omitempty"`  // Unix timestamp
+}
+
+const CacheTTL = 5 * time.Minute // Cache validity duration
+
+// CacheDir returns the global cache directory path
 func CacheDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".hustlemc")
+}
+
+// ProjectCacheDir returns the cache directory for a specific project
+func ProjectCacheDir(projectPath string) string {
+	return filepath.Join(expandPath(projectPath), ".hustlemc")
+}
+
+// LoadProjectCache loads cached status for a project
+func LoadProjectCache(projectPath string) (*ProjectCache, error) {
+	cacheFile := filepath.Join(ProjectCacheDir(projectPath), "status.json")
+	
+	data, err := os.ReadFile(cacheFile)
+	if err != nil {
+		return nil, err
+	}
+	
+	var cache ProjectCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, err
+	}
+	
+	// Check if cache is still valid
+	if time.Since(cache.UpdatedAt) > CacheTTL {
+		return nil, fmt.Errorf("cache expired")
+	}
+	
+	return &cache, nil
+}
+
+// SaveProjectCache saves status cache for a project
+func SaveProjectCache(projectPath string, cache *ProjectCache) error {
+	cacheDir := ProjectCacheDir(projectPath)
+	
+	// Create cache directory if it doesn't exist
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return err
+	}
+	
+	cache.UpdatedAt = time.Now()
+	
+	data, err := json.MarshalIndent(cache, "", "  ")
+	if err != nil {
+		return err
+	}
+	
+	return os.WriteFile(filepath.Join(cacheDir, "status.json"), data, 0644)
+}
+
+// UpdateProjectCache updates specific fields in the project cache
+func UpdateProjectCache(projectPath string, updates func(*ProjectCache)) error {
+	cache, _ := LoadProjectCache(projectPath)
+	if cache == nil {
+		cache = &ProjectCache{}
+	}
+	
+	updates(cache)
+	
+	return SaveProjectCache(projectPath, cache)
 }
 
 // LoadProjects loads projects from cache or runs discovery
@@ -84,37 +155,51 @@ func GetGitStatus(projectPath string) (*GitStatus, error) {
 		return nil, nil
 	}
 	
+	// Git status changes frequently, so we always fetch fresh
+	// But we still save to cache for reference
+	
 	// Use mc-git-status script
 	home, _ := os.UserHomeDir()
 	binPath := filepath.Join(home, "Projects", "mission-control", "bin", "mc-git-status")
 	
 	cmd := exec.Command(binPath, expandedPath, "--json")
 	output, err := cmd.Output()
+	
+	var status *GitStatus
 	if err != nil {
 		// Fallback to direct git
-		return getGitStatusDirect(expandedPath)
+		status, _ = getGitStatusDirect(expandedPath)
+	} else {
+		var result struct {
+			Branch    string `json:"branch"`
+			Untracked int    `json:"untracked"`
+			Modified  int    `json:"modified"`
+			Staged    int    `json:"staged"`
+			Ahead     int    `json:"ahead"`
+			Behind    int    `json:"behind"`
+		}
+		if err := json.Unmarshal(output, &result); err != nil {
+			status, _ = getGitStatusDirect(expandedPath)
+		} else {
+			status = &GitStatus{
+				Branch:    result.Branch,
+				Untracked: result.Untracked,
+				Modified:  result.Modified,
+				Staged:    result.Staged,
+				Ahead:     result.Ahead,
+				Behind:    result.Behind,
+			}
+		}
 	}
 	
-	var result struct {
-		Branch    string `json:"branch"`
-		Untracked int    `json:"untracked"`
-		Modified  int    `json:"modified"`
-		Staged    int    `json:"staged"`
-		Ahead     int    `json:"ahead"`
-		Behind    int    `json:"behind"`
-	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return getGitStatusDirect(expandedPath)
+	// Update cache
+	if status != nil {
+		UpdateProjectCache(projectPath, func(c *ProjectCache) {
+			c.GitStatus = status
+		})
 	}
 	
-	return &GitStatus{
-		Branch:    result.Branch,
-		Untracked: result.Untracked,
-		Modified:  result.Modified,
-		Staged:    result.Staged,
-		Ahead:     result.Ahead,
-		Behind:    result.Behind,
-	}, nil
+	return status, nil
 }
 
 // getGitStatusDirect is a fallback using git directly
@@ -278,6 +363,11 @@ func getVercelStatusDirect(expandedPath string) (string, error) {
 func GetPrimaryLanguage(projectPath string) string {
 	expandedPath := expandPath(projectPath)
 
+	// Check cache first (language doesn't change often)
+	if cache, err := LoadProjectCache(projectPath); err == nil && cache.Language != "" {
+		return cache.Language
+	}
+
 	home, _ := os.UserHomeDir()
 	binPath := filepath.Join(home, "Projects", "mission-control", "bin", "mc-tokei-lang-perc")
 
@@ -294,12 +384,20 @@ func GetPrimaryLanguage(projectPath string) string {
 	}
 
 	// Extract just the language name
+	var language string
 	parts := strings.Split(result, ":")
 	if len(parts) > 0 {
-		return strings.TrimSpace(parts[0])
+		language = strings.TrimSpace(parts[0])
 	}
 
-	return ""
+	// Update cache
+	if language != "" {
+		UpdateProjectCache(projectPath, func(c *ProjectCache) {
+			c.Language = language
+		})
+	}
+
+	return language
 }
 
 // GetGitTimes returns the first commit time (project age) and last commit time
@@ -312,25 +410,51 @@ func GetGitTimes(projectPath string) (firstCommit, lastCommit time.Time) {
 		return time.Time{}, time.Time{}
 	}
 
-	// Get first commit time (oldest)
-	cmd := exec.Command("git", "-C", expandedPath, "log", "--reverse", "--format=%ct", "-1")
-	output, err := cmd.Output()
-	if err == nil {
-		var ts int64
-		if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%d", &ts); err == nil {
-			firstCommit = time.Unix(ts, 0)
+	// Check cache for first commit (doesn't change)
+	if cache, err := LoadProjectCache(projectPath); err == nil {
+		if cache.FirstCommit > 0 {
+			firstCommit = time.Unix(cache.FirstCommit, 0)
+		}
+		if cache.LastCommit > 0 {
+			lastCommit = time.Unix(cache.LastCommit, 0)
+		}
+		// If we have first commit cached, we might still need fresh last commit
+		if cache.FirstCommit > 0 && time.Since(cache.UpdatedAt) < CacheTTL {
+			return firstCommit, lastCommit
 		}
 	}
 
-	// Get last commit time (newest)
-	cmd = exec.Command("git", "-C", expandedPath, "log", "-1", "--format=%ct")
-	output, err = cmd.Output()
+	// Get first commit time (oldest) - only if not cached
+	if firstCommit.IsZero() {
+		cmd := exec.Command("git", "-C", expandedPath, "log", "--reverse", "--format=%ct", "-1")
+		output, err := cmd.Output()
+		if err == nil {
+			var ts int64
+			if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%d", &ts); err == nil {
+				firstCommit = time.Unix(ts, 0)
+			}
+		}
+	}
+
+	// Get last commit time (newest) - always fetch fresh
+	cmd := exec.Command("git", "-C", expandedPath, "log", "-1", "--format=%ct")
+	output, err := cmd.Output()
 	if err == nil {
 		var ts int64
 		if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%d", &ts); err == nil {
 			lastCommit = time.Unix(ts, 0)
 		}
 	}
+
+	// Update cache
+	UpdateProjectCache(projectPath, func(c *ProjectCache) {
+		if !firstCommit.IsZero() {
+			c.FirstCommit = firstCommit.Unix()
+		}
+		if !lastCommit.IsZero() {
+			c.LastCommit = lastCommit.Unix()
+		}
+	})
 
 	return firstCommit, lastCommit
 }
