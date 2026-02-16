@@ -82,6 +82,8 @@ const (
 	IconPush     = "\uf403" // U+F403 oct-repo_push
 	IconMerge    = "\ueafe" // U+EAFE cod-git_merge
 	IconPlayPause = "\uf04b" // U+F04B fa-play (toggle with F04C pause)
+	IconPlay      = "\uf04b" // U+F04B fa-play
+	IconPause     = "\uf04c" // U+F04C fa-pause
 	IconDeploy   = "\uebaa" // U+EBAA cod-cloud
 	IconReadme   = "\ueaf0" // U+EAF0 cod-files (readme)
 	IconRoadmap  = "\uf018" // U+F018 fa-road

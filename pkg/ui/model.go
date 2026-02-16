@@ -108,6 +108,7 @@ const (
 	DetailView
 	SearchMode
 	ChatMode
+	CommitMode // For entering commit message
 	HelpMode
 )
 
@@ -148,6 +149,19 @@ type chatResponseMsg struct {
 	err      error
 }
 
+// Action feedback messages
+type actionResultMsg struct {
+	action  string
+	project string
+	success bool
+	message string
+}
+
+type runningStateMsg struct {
+	project string
+	running bool
+}
+
 // =============================================================================
 // MODEL
 // =============================================================================
@@ -166,6 +180,8 @@ const (
 	ActionPlan
 	ActionTodo
 	ActionChat
+	ActionGitAdd    // Click on untracked count
+	ActionGitCommit // Click on modified count
 )
 
 // ButtonBounds tracks clickable button regions
@@ -210,6 +226,17 @@ type Model struct {
 	// Clickable buttons
 	buttonBounds []ButtonBounds
 	listStartY   int // Y offset where project list starts
+
+	// Commit mode
+	commitInput   textinput.Model
+	commitProject string // Project path for pending commit
+
+	// Status message (brief feedback on actions)
+	statusMsg     string
+	statusMsgTime time.Time
+
+	// Running servers (project name -> true if running)
+	runningServers map[string]bool
 }
 
 // =============================================================================
@@ -225,19 +252,25 @@ func NewModel() Model {
 	chat.Placeholder = "type C to chat in ~/Projects c to chat in selected project"
 	chat.CharLimit = 500
 
+	commit := textinput.New()
+	commit.Placeholder = "Enter commit message..."
+	commit.CharLimit = 200
+
 	clawClient, _ := openclaw.NewClientFromConfig()
 
 	homeDir, _ := os.UserHomeDir()
 
 	return Model{
-		projects:    []Project{},
-		filtered:    []Project{},
-		searchInput: search,
-		chatInput:   chat,
-		chatCwd:     filepath.Join(homeDir, "Projects"),
-		viewMode:    ListView,
-		loading:     true,
-		clawClient:  clawClient,
+		projects:       []Project{},
+		filtered:       []Project{},
+		searchInput:    search,
+		chatInput:      chat,
+		commitInput:    commit,
+		chatCwd:        filepath.Join(homeDir, "Projects"),
+		viewMode:       ListView,
+		loading:        true,
+		clawClient:     clawClient,
+		runningServers: make(map[string]bool),
 	}
 }
 
@@ -422,9 +455,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatResponse = msg.response
 		}
 		return m, nil
+
+	case actionResultMsg:
+		m.statusMsg = msg.message
+		m.statusMsgTime = time.Now()
+		// Refresh git status for the project after git actions
+		if msg.action == "git_add" || msg.action == "git_commit" {
+			return m, loadGitStatusCmd(msg.project, expandPath(m.getProjectByName(msg.project).Path))
+		}
+		return m, nil
+
+	case runningStateMsg:
+		m.runningServers[msg.project] = msg.running
+		// Update project Running state
+		for i := range m.projects {
+			if m.projects[i].Name == msg.project {
+				m.projects[i].Running = msg.running
+				break
+			}
+		}
+		m.syncFiltered()
+		return m, nil
 	}
 
 	return m, nil
+}
+
+// getProjectByName finds a project by name
+func (m *Model) getProjectByName(name string) *Project {
+	for i := range m.projects {
+		if m.projects[i].Name == name {
+			return &m.projects[i]
+		}
+	}
+	return nil
 }
 
 func (m *Model) updateStats() {
@@ -585,6 +649,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSearchKey(msg)
 	case ChatMode:
 		return m.handleChatKey(msg)
+	case CommitMode:
+		return m.handleCommitKey(msg)
 	default:
 		return m.handleListKey(msg)
 	}
@@ -777,16 +843,29 @@ func (m Model) executeAction(action ButtonAction, p Project) (tea.Model, tea.Cmd
 
 	switch action {
 	case ActionPush:
-		return m, runScriptCmd(filepath.Join(binDir, "mc-push"), expandedPath)
+		m.statusMsg = "Pushing " + p.Name + "..."
+		m.statusMsgTime = time.Now()
+		return m, runScriptWithFeedback(filepath.Join(binDir, "mc-push"), p.Name, "push", expandedPath)
 
 	case ActionMerge:
-		return m, runScriptCmd(filepath.Join(binDir, "mc-merge"), expandedPath)
+		m.statusMsg = "Opening PR for " + p.Name + "..."
+		m.statusMsgTime = time.Now()
+		return m, runScriptWithFeedback(filepath.Join(binDir, "mc-merge"), p.Name, "merge", expandedPath)
 
 	case ActionRun:
-		return m, runScriptCmd(filepath.Join(binDir, "mc-run"), expandedPath)
+		// Check if already running - toggle stop
+		if m.isProjectRunning(p.Name) {
+			m.statusMsg = "Stopping " + p.Name + "..."
+		} else {
+			m.statusMsg = "Starting " + p.Name + "..."
+		}
+		m.statusMsgTime = time.Now()
+		return m, runServerCmd(filepath.Join(binDir, "mc-run"), p.Name, expandedPath)
 
 	case ActionDeploy:
-		return m, runScriptCmd(filepath.Join(binDir, "mc-deploy"), expandedPath)
+		m.statusMsg = "Deploying " + p.Name + "..."
+		m.statusMsgTime = time.Now()
+		return m, runScriptWithFeedback(filepath.Join(binDir, "mc-deploy"), p.Name, "deploy", expandedPath)
 
 	case ActionReadme:
 		return m, runScriptCmd(filepath.Join(binDir, "mc-edit"), expandedPath, "README.md")
@@ -802,9 +881,52 @@ func (m Model) executeAction(action ButtonAction, p Project) (tea.Model, tea.Cmd
 
 	case ActionChat:
 		return m, runScriptCmd(filepath.Join(binDir, "mc-chat"), expandedPath)
+
+	case ActionGitAdd:
+		m.statusMsg = "Staging files in " + p.Name + "..."
+		m.statusMsgTime = time.Now()
+		return m, gitAddCmd(p.Name, expandedPath)
+
+	case ActionGitCommit:
+		// Enter commit mode
+		m.viewMode = CommitMode
+		m.commitProject = p.Path
+		m.commitInput.SetValue("")
+		m.commitInput.Focus()
+		return m, textinput.Blink
 	}
 
 	return m, nil
+}
+
+// isProjectRunning checks if a dev server is running for the project
+func (m *Model) isProjectRunning(projectName string) bool {
+	// Check map first
+	if running, ok := m.runningServers[projectName]; ok {
+		return running
+	}
+	// Check PID file
+	home, _ := os.UserHomeDir()
+	pidFile := filepath.Join(home, ".hustlemc", "pids", projectName+".pid")
+	if _, err := os.Stat(pidFile); err == nil {
+		// PID file exists - verify process is running
+		data, err := os.ReadFile(pidFile)
+		if err == nil {
+			var pid int
+			if _, err := fmt.Sscanf(string(data), "%d", &pid); err == nil {
+				// Check if process exists
+				process, err := os.FindProcess(pid)
+				if err == nil {
+					// On Unix, FindProcess always succeeds - need to signal
+					err := process.Signal(os.Signal(nil))
+					if err == nil {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // runScriptCmd runs a shell script without blocking the TUI
@@ -821,6 +943,106 @@ func runScriptCmd(script string, args ...string) tea.Cmd {
 			_ = cmd.Wait() // Ignore exit status - fire-and-forget
 		}()
 		return nil
+	}
+}
+
+// runScriptWithFeedback runs a script and returns feedback message
+func runScriptWithFeedback(script, projectName, action string, args ...string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command(script, args...)
+		if err := cmd.Start(); err != nil {
+			return actionResultMsg{
+				action:  action,
+				project: projectName,
+				success: false,
+				message: fmt.Sprintf("Failed to %s %s: %v", action, projectName, err),
+			}
+		}
+		// Reap in background, report success immediately
+		go func() {
+			_ = cmd.Wait()
+		}()
+		return actionResultMsg{
+			action:  action,
+			project: projectName,
+			success: true,
+			message: fmt.Sprintf("%s started for %s", strings.Title(action), projectName),
+		}
+	}
+}
+
+// runServerCmd runs the dev server script and updates running state
+func runServerCmd(script, projectName, projectPath string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command(script, projectPath)
+		output, err := cmd.CombinedOutput()
+		
+		// Determine if started or stopped based on output
+		outputStr := string(output)
+		running := strings.Contains(outputStr, "Started") || strings.Contains(outputStr, "starting")
+		
+		if err != nil {
+			return actionResultMsg{
+				action:  "run",
+				project: projectName,
+				success: false,
+				message: fmt.Sprintf("Run failed for %s: %v", projectName, err),
+			}
+		}
+		
+		// Return running state update
+		return runningStateMsg{
+			project: projectName,
+			running: running,
+		}
+	}
+}
+
+// gitAddCmd runs git add -A
+func gitAddCmd(projectName, projectPath string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("git", "-C", projectPath, "add", "-A")
+		err := cmd.Run()
+		
+		if err != nil {
+			return actionResultMsg{
+				action:  "git_add",
+				project: projectName,
+				success: false,
+				message: fmt.Sprintf("git add failed: %v", err),
+			}
+		}
+		
+		return actionResultMsg{
+			action:  "git_add",
+			project: projectName,
+			success: true,
+			message: fmt.Sprintf("Staged all files in %s", projectName),
+		}
+	}
+}
+
+// gitCommitCmd runs git commit with message
+func gitCommitCmd(projectName, projectPath, message string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("git", "-C", projectPath, "commit", "-m", message)
+		err := cmd.Run()
+		
+		if err != nil {
+			return actionResultMsg{
+				action:  "git_commit",
+				project: projectName,
+				success: false,
+				message: fmt.Sprintf("git commit failed: %v", err),
+			}
+		}
+		
+		return actionResultMsg{
+			action:  "git_commit",
+			project: projectName,
+			success: true,
+			message: fmt.Sprintf("Committed to %s", projectName),
+		}
 	}
 }
 
@@ -847,6 +1069,33 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.chatInput, cmd = m.chatInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) handleCommitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		message := m.commitInput.Value()
+		if message == "" {
+			return m, nil
+		}
+
+		m.commitInput.SetValue("")
+		m.viewMode = ListView
+		m.statusMsg = "Committing..."
+		m.statusMsgTime = time.Now()
+
+		// Get project name from path
+		projectName := filepath.Base(m.commitProject)
+		return m, gitCommitCmd(projectName, expandPath(m.commitProject), message)
+	case "esc":
+		m.viewMode = ListView
+		m.commitInput.SetValue("")
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.commitInput, cmd = m.commitInput.Update(msg)
 	return m, cmd
 }
 
@@ -1024,11 +1273,51 @@ func (m *Model) renderProjectRow(p Project, idx int, width int, isOdd bool, isSe
 	projectAge := formatTimeSince(p.FirstCommit)
 	lastCommit := formatTimeSince(p.LastCommit)
 
-	// Build content
+	// Build content - track positions of clickable git stats
 	seg1 := fmt.Sprintf("%s %-18s", typeIcon, truncate(p.Name, 18))
 	seg2 := fmt.Sprintf(" %s%4s %s%4s ", IconCommitStart, projectAge, IconCommitEnd, lastCommit)
+	
+	// Git stats - make untracked and modified clickable
 	seg3 := fmt.Sprintf(" %s%-2d %s%-2d %s%-2d ", IconStaged, p.Staged, IconUntracked, p.Untracked, IconModified, p.Modified)
+	
+	// Track positions for git stat clicks
+	seg1Len := lipgloss.Width(seg1)
+	seg2Len := lipgloss.Width(seg2)
+	gitStatsStart := seg1Len + seg2Len
+	
+	// Untracked position: after staged icon+count (Icon + 2 digits + space = ~4 chars)
+	untrackedStart := gitStatsStart + 5 // after " S##"
+	untrackedEnd := untrackedStart + 4   // "U##"
+	
+	// Modified position: after untracked icon+count
+	modifiedStart := untrackedEnd + 1
+	modifiedEnd := modifiedStart + 4
+	
+	// Add git stat click regions
+	if p.Untracked > 0 {
+		m.buttonBounds = append(m.buttonBounds, ButtonBounds{
+			StartX: untrackedStart,
+			EndX:   untrackedEnd,
+			Action: ActionGitAdd,
+			Row:    rowNum,
+		})
+	}
+	if p.Modified > 0 || p.Staged > 0 {
+		m.buttonBounds = append(m.buttonBounds, ButtonBounds{
+			StartX: modifiedStart,
+			EndX:   modifiedEnd,
+			Action: ActionGitCommit,
+			Row:    rowNum,
+		})
+	}
+	
 	seg4 := fmt.Sprintf(" %s%-2d %s%-2d", IconIssue, p.Issues, IconPR, p.PRs)
+	
+	// Determine play/pause icon based on running state
+	runIcon := IconPlay
+	if m.isProjectRunning(p.Name) || p.Running {
+		runIcon = IconPause
+	}
 	
 	// Action buttons - track positions for click handling
 	buttonIcons := []struct {
@@ -1037,7 +1326,7 @@ func (m *Model) renderProjectRow(p Project, idx int, width int, isOdd bool, isSe
 	}{
 		{IconPush, ActionPush},
 		{IconMerge, ActionMerge},
-		{IconPlayPause, ActionRun},
+		{runIcon, ActionRun},
 		{IconDeploy, ActionDeploy},
 		{IconReadme, ActionReadme},
 		{IconRoadmap, ActionRoadmap},
@@ -1194,6 +1483,21 @@ func truncate(s string, maxLen int) string {
 
 func (m Model) renderChatBox() string {
 	var content string
+
+	// CommitMode - show commit input
+	if m.viewMode == CommitMode {
+		projectName := filepath.Base(m.commitProject)
+		content = fmt.Sprintf("%s Commit %s: %s", IconModified, projectName, m.commitInput.View())
+		box := ChatBoxStyle.Width(m.width - 4).Render(content)
+		return box
+	}
+
+	// Show recent status message (within 5 seconds)
+	if m.statusMsg != "" && time.Since(m.statusMsgTime) < 5*time.Second {
+		content = fmt.Sprintf("%s %s", IconCheck, m.statusMsg)
+		box := ChatBoxStyle.Width(m.width - 4).Render(content)
+		return box
+	}
 
 	if m.chatLoading {
 		content = fmt.Sprintf("%s Thinking...", IconBrain)
