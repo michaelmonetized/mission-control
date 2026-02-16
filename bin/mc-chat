@@ -3,16 +3,29 @@
 # Usage: mc-chat <project-path>
 
 set -e
+
+# Validate arguments
+if [[ -z "${1:-}" ]]; then
+  echo "Usage: mc-chat <project-path>" >&2
+  exit 1
+fi
+
 PROJECT_PATH="$1"
+
+if [[ ! -d "$PROJECT_PATH" ]]; then
+  echo "Error: Directory does not exist: $PROJECT_PATH" >&2
+  exit 1
+fi
+
 PROJECT=$(basename "$PROJECT_PATH")
 
-# If in tmux, open in new pane; otherwise new terminal
+# If in tmux, open in new pane; otherwise new terminal (non-blocking)
 if [[ -n "$TMUX" ]]; then
   tmux split-window -h "cd '$PROJECT_PATH' && openclaw"
 else
-  # Fallback: new terminal window
+  # Fallback: new terminal window (detached so it doesn't block)
   osascript -e "tell application \"Terminal\" to do script \"cd '$PROJECT_PATH' && openclaw\"" 2>/dev/null || \
-  (cd "$PROJECT_PATH" && openclaw)
+  (cd "$PROJECT_PATH" && nohup openclaw >/dev/null 2>&1 &)
 fi
 
 echo "Opened OpenClaw for $PROJECT"

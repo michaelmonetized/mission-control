@@ -7,8 +7,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
+
+// cacheMutex protects concurrent updates to project cache files
+var cacheMutex sync.Mutex
 
 // Project represents a discovered project
 type Project struct {
@@ -99,8 +103,16 @@ func SaveProjectCache(projectPath string, cache *ProjectCache) error {
 }
 
 // UpdateProjectCache updates specific fields in the project cache
+// Thread-safe with mutex to prevent TOCTOU races
 func UpdateProjectCache(projectPath string, updates func(*ProjectCache)) error {
-	cache, _ := LoadProjectCache(projectPath)
+	cacheMutex.Lock()
+	defer cacheMutex.Unlock()
+
+	cache, err := LoadProjectCache(projectPath)
+	if err != nil && !os.IsNotExist(err) && !strings.Contains(err.Error(), "cache expired") {
+		// Log but continue - we'll create fresh cache
+		// Real errors (corruption) should be noted
+	}
 	if cache == nil {
 		cache = &ProjectCache{}
 	}
@@ -139,7 +151,7 @@ func LoadProjects() ([]Project, error) {
 // RunDiscovery runs the mc-discover script
 func RunDiscovery() error {
 	home, _ := os.UserHomeDir()
-	binPath := filepath.Join(home, "Projects", "mission-control", "bin", "mc-discover")
+	binPath := getBinPath("mc-discover")
 	
 	cmd := exec.Command(binPath, filepath.Join(home, "Projects"), "--json")
 	return cmd.Run()
@@ -158,9 +170,8 @@ func GetGitStatus(projectPath string) (*GitStatus, error) {
 	// Git status changes frequently, so we always fetch fresh
 	// But we still save to cache for reference
 	
-	// Use mc-git-status script
-	home, _ := os.UserHomeDir()
-	binPath := filepath.Join(home, "Projects", "mission-control", "bin", "mc-git-status")
+	// Use mc-git-status script (PATH lookup with fallback)
+	binPath := getBinPath("mc-git-status")
 	
 	cmd := exec.Command(binPath, expandedPath, "--json")
 	output, err := cmd.Output()
@@ -245,9 +256,8 @@ func getGitStatusDirect(expandedPath string) (*GitStatus, error) {
 func GetGitHubStatus(projectPath string) (*GitHubStatus, error) {
 	expandedPath := expandPath(projectPath)
 	
-	// Use mc-gh-status script
-	home, _ := os.UserHomeDir()
-	binPath := filepath.Join(home, "Projects", "mission-control", "bin", "mc-gh-status")
+	// Use mc-gh-status script (PATH lookup with fallback)
+	binPath := getBinPath("mc-gh-status")
 	
 	cmd := exec.Command(binPath, expandedPath, "--json")
 	output, err := cmd.Output()
@@ -304,9 +314,8 @@ func GetVercelStatus(projectPath string) (string, error) {
 		return "", nil
 	}
 	
-	// Use mc-vl-status script
-	home, _ := os.UserHomeDir()
-	binPath := filepath.Join(home, "Projects", "mission-control", "bin", "mc-vl-status")
+	// Use mc-vl-status script (PATH lookup with fallback)
+	binPath := getBinPath("mc-vl-status")
 	
 	cmd := exec.Command(binPath, expandedPath, "--json")
 	output, err := cmd.Output()
@@ -368,8 +377,7 @@ func GetPrimaryLanguage(projectPath string) string {
 		return cache.Language
 	}
 
-	home, _ := os.UserHomeDir()
-	binPath := filepath.Join(home, "Projects", "mission-control", "bin", "mc-tokei-lang-perc")
+	binPath := getBinPath("mc-tokei-lang-perc")
 
 	cmd := exec.Command(binPath, expandedPath)
 	output, err := cmd.Output()
@@ -456,15 +464,18 @@ func GetGitTimes(projectPath string) (firstCommit, lastCommit time.Time) {
 		}
 	}
 
-	// Update cache
-	UpdateProjectCache(projectPath, func(c *ProjectCache) {
-		if !firstCommit.IsZero() {
-			c.FirstCommit = firstCommit.Unix()
-		}
-		if !lastCommit.IsZero() {
-			c.LastCommit = lastCommit.Unix()
-		}
-	})
+	// Update cache only if we have non-zero values to store
+	// This prevents overwriting valid cached data with zeros
+	if !firstCommit.IsZero() || !lastCommit.IsZero() {
+		UpdateProjectCache(projectPath, func(c *ProjectCache) {
+			if !firstCommit.IsZero() {
+				c.FirstCommit = firstCommit.Unix()
+			}
+			if !lastCommit.IsZero() {
+				c.LastCommit = lastCommit.Unix()
+			}
+		})
+	}
 
 	return firstCommit, lastCommit
 }
@@ -476,4 +487,15 @@ func expandPath(path string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+// getBinPath finds a script in PATH first, then falls back to hardcoded location
+func getBinPath(scriptName string) string {
+	// Try PATH first for portability
+	if path, err := exec.LookPath(scriptName); err == nil {
+		return path
+	}
+	// Fallback to development location
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "Projects", "mission-control", "bin", scriptName)
 }

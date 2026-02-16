@@ -516,13 +516,15 @@ func detectProjectType(p Project) ProjectType {
 	}
 
 	// Language-based detection from tokei
+	// Normalize language string for comparison
+	lang = strings.TrimSpace(strings.ToLower(lang))
+	
 	switch {
-	case strings.Contains(lang, "go"):
+	case lang == "go":
 		return TypeGo
-	case strings.Contains(lang, "c") && !strings.Contains(lang, "css"):
-		if lang == "c" || strings.HasPrefix(lang, "c ") {
-			return TypeC
-		}
+	case lang == "c":
+		// Exact match only - avoids c++, c#, objective-c, css, etc.
+		return TypeC
 	case strings.Contains(lang, "python"):
 		return TypePython
 	case strings.Contains(lang, "ruby"):
@@ -806,10 +808,18 @@ func (m Model) executeAction(action ButtonAction, p Project) (tea.Model, tea.Cmd
 }
 
 // runScriptCmd runs a shell script without blocking the TUI
+// Properly reaps child processes to avoid zombies
 func runScriptCmd(script string, args ...string) tea.Cmd {
 	return func() tea.Msg {
 		cmd := exec.Command(script, args...)
-		cmd.Start() // Don't wait
+		if err := cmd.Start(); err != nil {
+			// Log error but don't block - scripts may not exist
+			return nil
+		}
+		// Spawn goroutine to reap child process (prevents zombies)
+		go func() {
+			_ = cmd.Wait() // Ignore exit status - fire-and-forget
+		}()
 		return nil
 	}
 }
@@ -1163,11 +1173,19 @@ func formatTimeSince(t time.Time) string {
 	return fmt.Sprintf("%2dy", int(d.Hours()/(24*365)))
 }
 
+// truncate shortens a string to maxLen runes, handling multi-byte UTF-8 properly
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	if maxLen <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen-1] + "…"
+	if maxLen == 1 {
+		return "…"
+	}
+	return string(runes[:maxLen-1]) + "…"
 }
 
 // =============================================================================
@@ -1342,16 +1360,8 @@ func expandPath(path string) string {
 	return path
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
+// min and max are Go 1.21+ builtins - no local helpers needed
+// maxInt is an alias for max to avoid renaming throughout codebase
 func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+	return max(a, b)
 }

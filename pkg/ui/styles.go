@@ -238,7 +238,8 @@ var (
 // =============================================================================
 
 // RenderPLSegment renders a powerline segment with proper separators
-func RenderPLSegment(content string, style lipgloss.Style, leftCap, rightCap string, fgColor lipgloss.Color) string {
+// Note: fgColor parameter removed as it was unused
+func RenderPLSegment(content string, style lipgloss.Style, leftCap, rightCap string) string {
 	// Left cap: fg=segment color, bg=none (terminal)
 	leftCapStyle := lipgloss.NewStyle().Foreground(style.GetBackground())
 	// Right cap: fg=segment color, bg=none
@@ -270,9 +271,4 @@ func RenderScrollbar(current, total, height int) string {
 	return sb
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
+// max is a Go 1.21+ builtin - no local helper needed

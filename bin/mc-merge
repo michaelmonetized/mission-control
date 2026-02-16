@@ -3,6 +3,18 @@
 # Usage: mc-merge <project-path>
 
 set -e
+
+# Validate arguments
+if [[ -z "${1:-}" ]]; then
+  echo "Usage: mc-merge <project-path>" >&2
+  exit 1
+fi
+
+if [[ ! -d "$1" ]]; then
+  echo "Error: Directory does not exist: $1" >&2
+  exit 1
+fi
+
 cd "$1"
 
 # Open PR in browser (non-blocking)
