@@ -930,18 +930,14 @@ func (m Model) renderProjectRow(p Project, idx int, width int, isOdd bool, isSel
 	}
 
 	// Apply ANSI background color directly (bypassing lipgloss to avoid icon issues)
-	// Subtle striping: 235 (even) vs 236 (odd) - just 1 step difference
-	var bgColor string
+	// Very subtle striping: no bg (even) vs 233 (odd) - barely visible
 	if isSelected {
-		bgColor = "6" // cyan
-		return fmt.Sprintf("\033[30;48;5;%sm%s\033[0m", bgColor, fullRow) // black fg for selected
+		return fmt.Sprintf("\033[30;48;5;6m%s\033[0m", fullRow) // black on cyan
 	} else if isOdd {
-		bgColor = "236" // slightly lighter
-	} else {
-		bgColor = "235" // slightly darker
+		return fmt.Sprintf("\033[48;5;233m%s\033[0m", fullRow) // very dark gray
 	}
-	
-	return fmt.Sprintf("\033[48;5;%sm%s\033[0m", bgColor, fullRow)
+	// Even rows: no background (terminal default)
+	return fullRow
 }
 
 // getTypeIcon returns the appropriate icon for a project type
