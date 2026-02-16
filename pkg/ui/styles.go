@@ -56,11 +56,11 @@ const (
 	IconRocket = "\uf427" // U+F427 oct-rocket
 
 	// Vercel build status
-	IconVercel       = "\ue8d3"  // U+E8D3 dev-vercel
-	IconReady        = "\uf0063" // U+F0063 md-arrow_up_drop_circle_outline
-	IconBuilding     = "\uf1adf" // U+F1ADF md-timer_pause_outline
-	IconQueued       = "\uead8"  // U+EAD8 cod-debug
-	IconFailed       = "\uead8"  // U+EAD8 cod-debug (same, red color distinguishes)
+	IconVercel       = "\ue8d3"      // U+E8D3 dev-vercel
+	IconReady        = "\U000f0063"  // U+F0063 md-arrow_up_drop_circle_outline
+	IconBuilding     = "\U000f1adf"  // U+F1ADF md-timer_pause_outline
+	IconQueued       = "\uead8"      // U+EAD8 cod-debug
+	IconFailed       = "\uead8"      // U+EAD8 cod-debug (same, red color distinguishes)
 
 	// Swift build status
 	IconSwift   = "\ue699" // U+E699 seti-swift
@@ -68,10 +68,10 @@ const (
 	IconX       = "\u2718" // U+2718 heavy ballot x
 
 	// Git status
-	IconGit       = "\ue702"  // U+E702 dev-git
-	IconStaged    = "\uf1a9e" // U+F1A9E md-file_document_plus_outline
-	IconUntracked = "\uf262"  // U+F262 fa-firstdraft
-	IconModified  = "\uf459"  // U+F459 oct-diff-modified
+	IconGit       = "\ue702"      // U+E702 dev-git
+	IconStaged    = "\U000f1a9e"  // U+F1A9E md-file_document_plus_outline
+	IconUntracked = "\uf262"      // U+F262 fa-firstdraft
+	IconModified  = "\uf459"      // U+F459 oct-diff-modified
 
 	// GitHub status
 	IconGitHub = "\ueb00" // U+EB00 cod-github_alt
