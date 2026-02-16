@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# mc-run - Start/stop dev server in background
+# Usage: mc-run <project-path>
+
+set -e
+PROJECT_PATH="$1"
+PROJECT=$(basename "$PROJECT_PATH")
+PID_DIR="$HOME/.hustlemc/pids"
+LOG_DIR="$HOME/.hustlemc/logs"
+PID_FILE="$PID_DIR/$PROJECT.pid"
+LOG_FILE="$LOG_DIR/$PROJECT.log"
+
+mkdir -p "$PID_DIR" "$LOG_DIR"
+
+cd "$PROJECT_PATH"
+
+# Check if already running
+if [[ -f "$PID_FILE" ]]; then
+  PID=$(cat "$PID_FILE")
+  if kill -0 "$PID" 2>/dev/null; then
+    # Stop it
+    kill "$PID" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    osascript -e "display notification \"Dev server stopped\" with title \"$PROJECT\"" 2>/dev/null || true
+    echo "Stopped dev server (PID $PID)"
+    exit 0
+  else
+    rm -f "$PID_FILE"
+  fi
+fi
+
+# Detect package manager and start dev server
+if [[ -f "bun.lockb" ]] || [[ -f "bunfig.toml" ]]; then
+  CMD="bun run dev"
+elif [[ -f "pnpm-lock.yaml" ]]; then
+  CMD="pnpm run dev"
+elif [[ -f "yarn.lock" ]]; then
+  CMD="yarn dev"
+else
+  CMD="npm run dev"
+fi
+
+# Start in background
+(
+  $CMD > "$LOG_FILE" 2>&1
+) &
+
+echo $! > "$PID_FILE"
+disown
+
+osascript -e "display notification \"Dev server started\" with title \"$PROJECT\"" 2>/dev/null || true
+echo "Started dev server (PID $(cat "$PID_FILE"))"
+echo "Logs: $LOG_FILE"

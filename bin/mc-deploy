@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# mc-deploy - Vercel deploy in background
+# Usage: mc-deploy <project-path>
+
+set -e
+cd "$1"
+PROJECT=$(basename "$1")
+
+# Deploy in background, notify on completion
+(
+  if vercel --prod 2>&1; then
+    osascript -e "display notification \"Deploy successful\" with title \"$PROJECT\"" 2>/dev/null || true
+  else
+    osascript -e "display notification \"Deploy failed\" with title \"$PROJECT\"" 2>/dev/null || true
+  fi
+) &
+
+disown
+echo "Deploying in background..."

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# mc-edit - Open file in editor (new tmux pane)
+# Usage: mc-edit <project-path> <filename>
+
+set -e
+PROJECT_PATH="$1"
+FILE="$2"
+FULL_PATH="$PROJECT_PATH/$FILE"
+
+# Check if file exists, create if not
+if [[ ! -f "$FULL_PATH" ]]; then
+  touch "$FULL_PATH"
+fi
+
+# If in tmux, open in new pane; otherwise just open
+if [[ -n "$TMUX" ]]; then
+  tmux split-window -h "cd '$PROJECT_PATH' && nvim '$FILE'"
+else
+  # Fallback: open in background terminal
+  osascript -e "tell application \"Terminal\" to do script \"cd '$PROJECT_PATH' && nvim '$FILE'\"" 2>/dev/null || \
+  nvim "$FULL_PATH"
+fi
+
+echo "Opened $FILE"

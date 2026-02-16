@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# mc-push - Git push in background
+# Usage: mc-push <project-path>
+
+set -e
+cd "$1"
+
+# Push in background, notify on completion
+(
+  if git push 2>&1; then
+    osascript -e "display notification \"Push successful\" with title \"$1\"" 2>/dev/null || true
+  else
+    osascript -e "display notification \"Push failed\" with title \"$1\"" 2>/dev/null || true
+  fi
+) &
+
+disown
+echo "Pushing in background..."

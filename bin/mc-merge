@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# mc-merge - Open PR in browser for review/merge
+# Usage: mc-merge <project-path>
+
+set -e
+cd "$1"
+
+# Open PR in browser (non-blocking)
+if gh pr view --web 2>/dev/null; then
+  echo "Opened PR in browser"
+else
+  # No PR exists, offer to create one
+  echo "No PR found. Creating..."
+  gh pr create --web 2>/dev/null || echo "Could not create PR"
+fi

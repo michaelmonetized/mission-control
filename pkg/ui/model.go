@@ -770,77 +770,48 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) executeAction(action ButtonAction, p Project) (tea.Model, tea.Cmd) {
 	expandedPath := expandPath(p.Path)
+	home, _ := os.UserHomeDir()
+	binDir := filepath.Join(home, "Projects", "mission-control", "bin")
 
 	switch action {
 	case ActionPush:
-		// Git push
-		return m, tea.ExecProcess(
-			func() *exec.Cmd {
-				cmd := exec.Command("git", "push")
-				cmd.Dir = expandedPath
-				return cmd
-			}(),
-			nil,
-		)
+		return m, runScriptCmd(filepath.Join(binDir, "mc-push"), expandedPath)
 
 	case ActionMerge:
-		// Open PR merge in browser via gh
-		return m, tea.ExecProcess(
-			func() *exec.Cmd {
-				cmd := exec.Command("gh", "pr", "view", "--web")
-				cmd.Dir = expandedPath
-				return cmd
-			}(),
-			nil,
-		)
+		return m, runScriptCmd(filepath.Join(binDir, "mc-merge"), expandedPath)
 
 	case ActionRun:
-		// Run dev server (npm/bun run dev)
-		return m, tea.ExecProcess(
-			func() *exec.Cmd {
-				cmd := exec.Command("bun", "run", "dev")
-				cmd.Dir = expandedPath
-				return cmd
-			}(),
-			nil,
-		)
+		return m, runScriptCmd(filepath.Join(binDir, "mc-run"), expandedPath)
 
 	case ActionDeploy:
-		// Vercel deploy
-		return m, tea.ExecProcess(
-			func() *exec.Cmd {
-				cmd := exec.Command("vercel", "--prod")
-				cmd.Dir = expandedPath
-				return cmd
-			}(),
-			nil,
-		)
+		return m, runScriptCmd(filepath.Join(binDir, "mc-deploy"), expandedPath)
 
 	case ActionReadme:
-		return m, openInEditorCmd(p.Path, "README.md")
+		return m, runScriptCmd(filepath.Join(binDir, "mc-edit"), expandedPath, "README.md")
 
 	case ActionRoadmap:
-		return m, openInEditorCmd(p.Path, "ROADMAP.md")
+		return m, runScriptCmd(filepath.Join(binDir, "mc-edit"), expandedPath, "ROADMAP.md")
 
 	case ActionPlan:
-		return m, openInEditorCmd(p.Path, "PLAN.md")
+		return m, runScriptCmd(filepath.Join(binDir, "mc-edit"), expandedPath, "PLAN.md")
 
 	case ActionTodo:
-		return m, openInEditorCmd(p.Path, "TODO.md")
+		return m, runScriptCmd(filepath.Join(binDir, "mc-edit"), expandedPath, "TODO.md")
 
 	case ActionChat:
-		// Open OpenClaw in project
-		return m, tea.ExecProcess(
-			func() *exec.Cmd {
-				cmd := exec.Command("openclaw")
-				cmd.Dir = expandedPath
-				return cmd
-			}(),
-			nil,
-		)
+		return m, runScriptCmd(filepath.Join(binDir, "mc-chat"), expandedPath)
 	}
 
 	return m, nil
+}
+
+// runScriptCmd runs a shell script without blocking the TUI
+func runScriptCmd(script string, args ...string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command(script, args...)
+		cmd.Start() // Don't wait
+		return nil
+	}
 }
 
 func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

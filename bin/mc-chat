@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# mc-chat - Open OpenClaw chat in project (new tmux pane)
+# Usage: mc-chat <project-path>
+
+set -e
+PROJECT_PATH="$1"
+PROJECT=$(basename "$PROJECT_PATH")
+
+# If in tmux, open in new pane; otherwise new terminal
+if [[ -n "$TMUX" ]]; then
+  tmux split-window -h "cd '$PROJECT_PATH' && openclaw"
+else
+  # Fallback: new terminal window
+  osascript -e "tell application \"Terminal\" to do script \"cd '$PROJECT_PATH' && openclaw\"" 2>/dev/null || \
+  (cd "$PROJECT_PATH" && openclaw)
+fi
+
+echo "Opened OpenClaw for $PROJECT"
