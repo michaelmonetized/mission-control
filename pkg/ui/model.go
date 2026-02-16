@@ -866,16 +866,22 @@ func (m Model) renderProjectList(height int) string {
 		p := m.filtered[i]
 		row := m.renderProjectRow(p, i, listWidth)
 
+		// Pad row to full width for proper striping
+		rowLen := lipgloss.Width(row)
+		if rowLen < listWidth {
+			row = row + strings.Repeat(" ", listWidth-rowLen)
+		}
+
 		// Apply stripe + selection styles
 		isSelected := i == m.selectedIdx
 		isOdd := (i-m.scrollOffset)%2 == 1
 
 		if isSelected {
-			row = SelectedRowStyle.Width(listWidth).Render(row)
+			row = SelectedRowStyle.Render(row)
 		} else if isOdd {
-			row = RowOddStyle.Width(listWidth).Render(row)
+			row = RowOddStyle.Render(row)
 		} else {
-			row = RowEvenStyle.Width(listWidth).Render(row)
+			row = RowEvenStyle.Render(row)
 		}
 
 		rows = append(rows, row)
