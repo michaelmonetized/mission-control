@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/michaelmonetized/mission-control/pkg/discover"
+	"github.com/michaelmonetized/mission-control/pkg/openclaw"
 )
 
 // Project types
@@ -104,6 +105,18 @@ type Model struct {
 	// Loading state
 	loading       bool
 	statusLoading sync.Map
+	
+	// OpenClaw chat
+	clawClient    *openclaw.Client
+	chatResponse  string
+	chatLoading   bool
+	chatError     string
+}
+
+// Chat messages for async response
+type chatResponseMsg struct {
+	response string
+	err      error
 }
 
 // NewModel creates a new application model
@@ -114,7 +127,10 @@ func NewModel() Model {
 	
 	chat := textinput.New()
 	chat.Placeholder = "Ask OpenClaw..."
-	chat.CharLimit = 200
+	chat.CharLimit = 500
+	
+	// Try to connect to OpenClaw gateway
+	clawClient, _ := openclaw.NewClientFromConfig()
 	
 	return Model{
 		projects:    []Project{},
@@ -123,6 +139,7 @@ func NewModel() Model {
 		chatInput:   chat,
 		viewMode:    ListView,
 		loading:     true,
+		clawClient:  clawClient,
 	}
 }
 
@@ -344,6 +361,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+		
+	case chatResponseMsg:
+		m.chatLoading = false
+		if msg.err != nil {
+			m.chatError = msg.err.Error()
+		} else {
+			m.chatResponse = msg.response
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -517,17 +543,46 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
-		// TODO: Send to OpenClaw
+		message := m.chatInput.Value()
+		if message == "" {
+			return m, nil
+		}
+		
+		// Get project context if one is selected
+		projectContext := ""
+		if len(m.filtered) > 0 && m.selectedIdx < len(m.filtered) {
+			p := m.filtered[m.selectedIdx]
+			projectContext = fmt.Sprintf("Project: %s (%s) at %s", p.Name, p.Type, p.Path)
+		}
+		
 		m.chatInput.SetValue("")
-		return m, nil
+		m.chatLoading = true
+		m.chatResponse = ""
+		m.chatError = ""
+		
+		return m, sendChatCmd(m.clawClient, message, projectContext)
 	case "esc":
 		m.viewMode = ListView
+		m.chatResponse = ""
+		m.chatError = ""
 		return m, nil
 	}
 	
 	var cmd tea.Cmd
 	m.chatInput, cmd = m.chatInput.Update(msg)
 	return m, cmd
+}
+
+// sendChatCmd sends a message to OpenClaw
+func sendChatCmd(client *openclaw.Client, message, projectContext string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return chatResponseMsg{err: fmt.Errorf("OpenClaw not connected")}
+		}
+		
+		response, err := client.SendMessageSync(message, projectContext)
+		return chatResponseMsg{response: response, err: err}
+	}
 }
 
 // View implements tea.Model
@@ -741,6 +796,29 @@ func (m Model) renderDetailView(height int) string {
 
 func (m Model) renderChatBar() string {
 	prefix := ChatPromptStyle.Render(">")
+	
+	// Show loading indicator
+	if m.chatLoading {
+		return prefix + " 󰔟 Thinking..."
+	}
+	
+	// Show error
+	if m.chatError != "" {
+		return prefix + " " + FailedStyle.Render("✗ "+m.chatError)
+	}
+	
+	// Show response (truncate to fit)
+	if m.chatResponse != "" {
+		response := m.chatResponse
+		// Clean up response (remove newlines, truncate)
+		response = strings.ReplaceAll(response, "\n", " ")
+		maxLen := m.width - 5
+		if maxLen > 0 && len(response) > maxLen {
+			response = response[:maxLen-3] + "..."
+		}
+		return prefix + " " + ReadyStyle.Render("󱐏 ") + response
+	}
+	
 	if m.viewMode == ChatMode {
 		return prefix + " " + m.chatInput.View()
 	}
