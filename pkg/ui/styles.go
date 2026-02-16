@@ -183,13 +183,14 @@ var (
 
 var (
 	// Alternating row colors (striped) - visible contrast
+	// Using Inline(true) to ensure background extends across full content
 	RowEvenStyle = lipgloss.NewStyle().
 		Foreground(ColorWhite).
-		Background(lipgloss.Color("233")) // Dark bg
+		Background(lipgloss.Color("234"))
 
 	RowOddStyle = lipgloss.NewStyle().
 		Foreground(ColorWhite).
-		Background(lipgloss.Color("237")) // Lighter bg for contrast
+		Background(lipgloss.Color("238")) // Lighter bg for contrast
 
 	// Selected row
 	SelectedRowStyle = lipgloss.NewStyle().

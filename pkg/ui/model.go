@@ -864,22 +864,10 @@ func (m Model) renderProjectList(height int) string {
 
 	for i := m.scrollOffset; i < len(m.filtered) && i < m.scrollOffset+height; i++ {
 		p := m.filtered[i]
-
-		// Determine row style based on selection and stripe
 		isSelected := i == m.selectedIdx
 		isOdd := (i-m.scrollOffset)%2 == 1
 
-		var rowStyle lipgloss.Style
-		if isSelected {
-			rowStyle = SelectedRowStyle
-		} else if isOdd {
-			rowStyle = RowOddStyle
-		} else {
-			rowStyle = RowEvenStyle
-		}
-
-		// renderProjectRow now handles styling internally
-		row := m.renderProjectRow(p, i, listWidth, rowStyle)
+		row := m.renderProjectRow(p, i, listWidth, isOdd, isSelected)
 		rows = append(rows, row)
 	}
 
@@ -904,73 +892,56 @@ func (m Model) renderProjectList(height int) string {
 	return result.String()
 }
 
-func (m Model) renderProjectRow(p Project, idx int, width int, rowStyle lipgloss.Style) string {
+func (m Model) renderProjectRow(p Project, idx int, width int, isOdd bool, isSelected bool) string {
 	// Type icon based on detected language/type
 	typeIcon := getTypeIcon(p.Type)
-
-	// Determine icon color based on state (we'll apply it within the row style)
-	var iconColor lipgloss.Color
-	switch p.VercelState {
-	case "ready":
-		iconColor = ColorGreen
-	case "building":
-		iconColor = ColorYellow
-	case "failed":
-		iconColor = ColorRed
-	default:
-		iconColor = ColorGray
-	}
 
 	// Time formatting with icons
 	projectAge := formatTimeSince(p.FirstCommit)
 	lastCommit := formatTimeSince(p.LastCommit)
 
-	// Build row content as plain text first (no inner styling)
-	// icon | name | age times | git stats | gh stats | actions
-	content := fmt.Sprintf("%s %-18s %s%4s %s%4s  %s%-2d %s%-2d %s%-2d  %s%-2d %s%-2d",
-		typeIcon,
-		truncate(p.Name, 18),
-		IconCommitStart, projectAge,
-		IconCommitEnd, lastCommit,
-		IconStaged, p.Staged,
-		IconUntracked, p.Untracked,
-		IconModified, p.Modified,
-		IconIssue, p.Issues,
-		IconPR, p.PRs,
-	)
-
+	// Build content
+	seg1 := fmt.Sprintf("%s %-18s", typeIcon, truncate(p.Name, 18))
+	seg2 := fmt.Sprintf(" %s%4s %s%4s ", IconCommitStart, projectAge, IconCommitEnd, lastCommit)
+	seg3 := fmt.Sprintf(" %s%-2d %s%-2d %s%-2d ", IconStaged, p.Staged, IconUntracked, p.Untracked, IconModified, p.Modified)
+	seg4 := fmt.Sprintf(" %s%-2d %s%-2d", IconIssue, p.Issues, IconPR, p.PRs)
+	
 	// Action buttons
-	actions := fmt.Sprintf("%s %s %s %s %s %s %s %s %s",
+	actions := fmt.Sprintf(" %s %s %s %s %s %s %s %s %s",
 		IconPush, IconMerge, IconPlayPause, IconDeploy,
 		IconReadme, IconRoadmap, IconPlan, IconTodo, IconChat)
 
-	// Calculate gap for elastic spacing
+	// Combine content
+	content := seg1 + seg2 + seg3 + seg4
 	contentWidth := lipgloss.Width(content)
 	actionsWidth := lipgloss.Width(actions)
-	gap := width - contentWidth - actionsWidth - 2
+	
+	// Calculate gap for elastic spacing
+	gap := width - contentWidth - actionsWidth
 	if gap < 0 {
 		gap = 0
 	}
 
-	// Full row with elastic gap
+	// Build full row with padding to exact width
 	fullRow := content + strings.Repeat(" ", gap) + actions
-
-	// Pad to full width
 	currentWidth := lipgloss.Width(fullRow)
 	if currentWidth < width {
 		fullRow += strings.Repeat(" ", width-currentWidth)
 	}
 
-	// Apply row style (background) to the entire row
-	// Then apply icon color just to the first character
-	styled := rowStyle.Width(width).Render(fullRow)
-
-	// Inject icon color at the start (replace first icon with colored version)
-	// This is a bit hacky but ensures the background extends fully
-	coloredIcon := lipgloss.NewStyle().Foreground(iconColor).Render(typeIcon)
-	styled = strings.Replace(styled, typeIcon, coloredIcon, 1)
-
-	return styled
+	// Apply ANSI background color directly (bypassing lipgloss to avoid icon issues)
+	// Colors: 234 (even/dark), 238 (odd/lighter), 6 (cyan/selected)
+	var bgColor string
+	if isSelected {
+		bgColor = "6" // cyan
+		return fmt.Sprintf("\033[30;48;5;%sm%s\033[0m", bgColor, fullRow) // black fg for selected
+	} else if isOdd {
+		bgColor = "238"
+	} else {
+		bgColor = "234"
+	}
+	
+	return fmt.Sprintf("\033[48;5;%sm%s\033[0m", bgColor, fullRow)
 }
 
 // getTypeIcon returns the appropriate icon for a project type
