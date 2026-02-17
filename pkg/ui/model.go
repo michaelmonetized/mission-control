@@ -810,8 +810,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Check if click is in project list area
-	// List starts at Y=3 (after top status + search box)
-	listStartY := 3
+	// Layout:
+	//   Line 0: Top status
+	//   Line 1: Search box top border
+	//   Line 2: Search box content
+	//   Line 3: Search box bottom border
+	//   Line 4+: Project list starts here
+	listStartY := 4
 	listHeight := m.getListHeight()
 
 	if msg.Y >= listStartY && msg.Y < listStartY+listHeight {
@@ -1280,18 +1285,18 @@ func (m *Model) renderProjectRow(p Project, idx int, width int, isOdd bool, isSe
 	// Git stats - make untracked and modified clickable
 	seg3 := fmt.Sprintf(" %s%-2d %s%-2d %s%-2d ", IconStaged, p.Staged, IconUntracked, p.Untracked, IconModified, p.Modified)
 	
-	// Track positions for git stat clicks
-	seg1Len := lipgloss.Width(seg1)
-	seg2Len := lipgloss.Width(seg2)
+	// Track positions for git stat clicks using actual terminal width
+	seg1Len := terminalWidth(seg1)
+	seg2Len := terminalWidth(seg2)
 	gitStatsStart := seg1Len + seg2Len
 	
-	// Untracked position: after staged icon+count (Icon + 2 digits + space = ~4 chars)
+	// Untracked position: after staged icon+count (Icon(2) + 2 digits + space = 5 chars)
 	untrackedStart := gitStatsStart + 5 // after " S##"
-	untrackedEnd := untrackedStart + 4   // "U##"
+	untrackedEnd := untrackedStart + 5   // Icon(2) + "##"
 	
 	// Modified position: after untracked icon+count
 	modifiedStart := untrackedEnd + 1
-	modifiedEnd := modifiedStart + 4
+	modifiedEnd := modifiedStart + 5
 	
 	// Add git stat click regions
 	if p.Untracked > 0 {
@@ -1348,33 +1353,34 @@ func (m *Model) renderProjectRow(p Project, idx int, width int, isOdd bool, isSe
 
 	// Combine content
 	content := seg1 + seg2 + seg3 + seg4
-	contentWidth := lipgloss.Width(content)
-	actionsWidth := lipgloss.Width(actions)
+	contentWidth := terminalWidth(content)
+	actionsWidth := terminalWidth(actions)
 	
-	// Calculate gap for elastic spacing
+	// Calculate gap for elastic spacing using actual terminal widths
 	gap := width - contentWidth - actionsWidth
 	if gap < 0 {
 		gap = 0
 	}
 
 	// Calculate button X positions (after gap)
-	buttonsStartX := contentWidth + gap + 1 // +1 for leading space
+	// Nerd Font icons render as width 2 in terminals
+	const iconTerminalWidth = 2
+	buttonsStartX := contentWidth + gap + 1 // +1 for leading space in actions
 	currentX := buttonsStartX
 	
 	for _, btn := range buttonIcons {
-		iconWidth := lipgloss.Width(btn.icon)
 		m.buttonBounds = append(m.buttonBounds, ButtonBounds{
 			StartX: currentX,
-			EndX:   currentX + iconWidth,
+			EndX:   currentX + iconTerminalWidth,
 			Action: btn.action,
 			Row:    rowNum,
 		})
-		currentX += iconWidth + 1 // +1 for space between icons
+		currentX += iconTerminalWidth + 1 // icon(2) + space(1) between icons
 	}
 
 	// Build full row with padding to exact width
 	fullRow := content + strings.Repeat(" ", gap) + actions
-	currentWidth := lipgloss.Width(fullRow)
+	currentWidth := terminalWidth(fullRow)
 	if currentWidth < width {
 		fullRow += strings.Repeat(" ", width-currentWidth)
 	}
@@ -1475,6 +1481,27 @@ func truncate(s string, maxLen int) string {
 		return "…"
 	}
 	return string(runes[:maxLen-1]) + "…"
+}
+
+// terminalWidth calculates the actual terminal width of a string,
+// accounting for Nerd Font icons which render as width 2 in terminals
+// but are reported as width 1 by lipgloss/runewidth.
+func terminalWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		// Nerd Fonts Private Use Area ranges:
+		// - E000-F8FF (BMP PUA)
+		// - F0000-FFFFD (Supplementary PUA-A)
+		// - 100000-10FFFD (Supplementary PUA-B)
+		// Most Nerd Font icons are in E000-F8FF range
+		if (r >= 0xE000 && r <= 0xF8FF) || (r >= 0xF0000 && r <= 0x10FFFD) {
+			w += 2 // Nerd Font icons render as double-width
+		} else {
+			// Use lipgloss default for other characters
+			w += lipgloss.Width(string(r))
+		}
+	}
+	return w
 }
 
 // =============================================================================
