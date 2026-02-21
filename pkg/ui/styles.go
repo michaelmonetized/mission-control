@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // =============================================================================
 // COLOR PALETTE (Catppuccin-inspired)
@@ -253,7 +257,12 @@ func RenderPLSegment(content string, style lipgloss.Style, leftCap, rightCap str
 // RenderScrollbar renders an OS9-style scrollbar
 func RenderScrollbar(current, total, height int) string {
 	if total <= height {
-		return ""
+		// Return blank lines to maintain consistent row width
+		lines := make([]string, height)
+		for i := range lines {
+			lines[i] = " "
+		}
+		return strings.Join(lines, "\n")
 	}
 
 	thumbSize := max(1, height*height/total)

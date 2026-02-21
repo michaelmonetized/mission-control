@@ -461,7 +461,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsgTime = time.Now()
 		// Refresh git status for the project after git actions
 		if msg.action == "git_add" || msg.action == "git_commit" {
-			return m, loadGitStatusCmd(msg.project, expandPath(m.getProjectByName(msg.project).Path))
+			if p := m.getProjectByName(msg.project); p != nil {
+				return m, loadGitStatusCmd(msg.project, expandPath(p.Path))
+			}
 		}
 		return m, nil
 
@@ -672,6 +674,23 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	listHeight := m.getListHeight()
+
+	// Guard against empty list — navigation on zero items would panic
+	if len(m.filtered) == 0 {
+		switch key {
+		case "/":
+			m.viewMode = SearchMode
+			m.searchInput.Focus()
+			return m, textinput.Blink
+		case "C":
+			homeDir, _ := os.UserHomeDir()
+			m.chatCwd = filepath.Join(homeDir, "Projects")
+			m.viewMode = ChatMode
+			m.chatInput.Focus()
+			return m, textinput.Blink
+		}
+		return m, nil
+	}
 
 	switch key {
 	case "j", "down":
@@ -1532,8 +1551,9 @@ func (m Model) renderChatBox() string {
 		content = fmt.Sprintf("%s %s", IconX, m.chatError)
 	} else if m.chatResponse != "" {
 		resp := strings.ReplaceAll(m.chatResponse, "\n", " ")
-		if len(resp) > m.width-10 {
-			resp = resp[:m.width-13] + "..."
+		respRunes := []rune(resp)
+		if len(respRunes) > m.width-10 {
+			resp = string(respRunes[:m.width-13]) + "..."
 		}
 		content = fmt.Sprintf("%s %s", IconChat, resp)
 	} else if m.viewMode == ChatMode {

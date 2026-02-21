@@ -21,11 +21,14 @@ PROJECT=$(basename "$PROJECT_PATH")
 
 # If in tmux, open in new pane; otherwise new terminal (non-blocking)
 if [[ -n "$TMUX" ]]; then
-  tmux split-window -h "cd '$PROJECT_PATH' && openclaw"
+  escaped_path=$(printf '%q' "$PROJECT_PATH")
+  tmux split-window -h "cd $escaped_path && openclaw"
 else
   # Fallback: new terminal window (detached so it doesn't block)
-  osascript -e "tell application \"Terminal\" to do script \"cd '$PROJECT_PATH' && openclaw\"" 2>/dev/null || \
-  (cd "$PROJECT_PATH" && nohup openclaw >/dev/null 2>&1 &)
+  escaped_path=$(printf '%q' "$PROJECT_PATH")
+  { osascript -e "tell application \"Terminal\" to do script \"cd $escaped_path && openclaw\"" 2>/dev/null || \
+    (cd "$PROJECT_PATH" && nohup openclaw >/dev/null 2>&1 &); } &
+  disown 2>/dev/null || true
 fi
 
 echo "Opened OpenClaw for $PROJECT"

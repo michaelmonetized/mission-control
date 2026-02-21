@@ -426,8 +426,8 @@ func GetGitTimes(projectPath string) (firstCommit, lastCommit time.Time) {
 		if cache.LastCommit > 0 {
 			lastCommit = time.Unix(cache.LastCommit, 0)
 		}
-		// If we have first commit cached, we might still need fresh last commit
-		if cache.FirstCommit > 0 && time.Since(cache.UpdatedAt) < CacheTTL {
+		// Only return early if both commits are cached and cache is fresh
+		if cache.FirstCommit > 0 && cache.LastCommit > 0 && time.Since(cache.UpdatedAt) < CacheTTL {
 			return firstCommit, lastCommit
 		}
 	}
