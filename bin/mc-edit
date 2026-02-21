@@ -32,8 +32,7 @@ if [[ -n "$TMUX" ]]; then
   escaped_file=$(printf '%q' "$FILE")
   tmux split-window -h "cd $escaped_path && nvim $escaped_file"
 else
-  # Fallback: open in background terminal
-  osascript -e "tell application \"Terminal\" to do script \"cd '$PROJECT_PATH' && nvim '$FILE'\"" 2>/dev/null || \
+  # Fallback: open directly (avoids shell injection via osascript single-quote interpolation)
   nvim "$FULL_PATH"
 fi
 

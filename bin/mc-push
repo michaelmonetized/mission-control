@@ -23,6 +23,7 @@ LOG_FILE="$LOG_DIR/push-$PROJECT.log"
 
 # Push in background, log output, notify on completion
 (
+  set +e  # Prevent errexit from aborting subshell before logging/notifying on push failure
   push_output=$(git push 2>&1)
   push_status=$?
   echo "$push_output" > "$LOG_FILE"
