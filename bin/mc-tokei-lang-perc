@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# mc-tokei-lang-perc - Get primary language and percentage
+# Usage: mc-tokei-lang-perc [path]
+
+set -euo pipefail
+
+# Check for required dependencies
+if ! command -v tokei &>/dev/null; then
+  echo "Unknown: 0%"
+  exit 0
+fi
+
+if ! command -v jq &>/dev/null; then
+  echo "Unknown: 0%"
+  exit 0
+fi
+
+# Run tokei and capture output
+output=$(tokei --output json "$@" 2>/dev/null) || {
+  echo "Unknown: 0%"
+  exit 0
+}
+
+# Process with jq, handling empty/null cases
+result=$(echo "$output" | jq -r '
+  del(.Total) 
+  | map_values(.code) 
+  | with_entries(select(.value > 0)) 
+  | if length == 0 then "Unknown: 0%" 
+    else (add // 0) as $t 
+    | if $t == 0 then "Unknown: 0%"
+      else to_entries | map(.value |= (. * 100 / $t | floor)) | max_by(.value) | "\(.key): \(.value)%"
+      end
+    end
+' 2>/dev/null) || result="Unknown: 0%"
+
+echo "$result"

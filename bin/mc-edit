@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# mc-edit - Open file in editor (new tmux pane)
+# Usage: mc-edit <project-path> <filename>
+
+set -e
+
+# Validate arguments
+if [[ -z "${1:-}" ]] || [[ -z "${2:-}" ]]; then
+  echo "Usage: mc-edit <project-path> <filename>" >&2
+  exit 1
+fi
+
+PROJECT_PATH="$1"
+FILE="$2"
+
+if [[ ! -d "$PROJECT_PATH" ]]; then
+  echo "Error: Directory does not exist: $PROJECT_PATH" >&2
+  exit 1
+fi
+
+FULL_PATH="$PROJECT_PATH/$FILE"
+
+# Check if file exists, create if not
+if [[ ! -f "$FULL_PATH" ]]; then
+  touch "$FULL_PATH"
+fi
+
+# If in tmux, open in new pane; otherwise just open
+if [[ -n "$TMUX" ]]; then
+  # Use printf %q to safely escape paths for shell
+  escaped_path=$(printf '%q' "$PROJECT_PATH")
+  escaped_file=$(printf '%q' "$FILE")
+  tmux split-window -h "cd $escaped_path && nvim $escaped_file"
+else
+  # Fallback: open in background terminal
+  osascript -e "tell application \"Terminal\" to do script \"cd '$PROJECT_PATH' && nvim '$FILE'\"" 2>/dev/null || \
+  nvim "$FULL_PATH"
+fi
+
+echo "Opened $FILE"

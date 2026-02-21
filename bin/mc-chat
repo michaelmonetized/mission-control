@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# mc-chat - Open OpenClaw chat in project (new tmux pane)
+# Usage: mc-chat <project-path>
+
+set -e
+
+# Validate arguments
+if [[ -z "${1:-}" ]]; then
+  echo "Usage: mc-chat <project-path>" >&2
+  exit 1
+fi
+
+PROJECT_PATH="$1"
+
+if [[ ! -d "$PROJECT_PATH" ]]; then
+  echo "Error: Directory does not exist: $PROJECT_PATH" >&2
+  exit 1
+fi
+
+PROJECT=$(basename "$PROJECT_PATH")
+
+# If in tmux, open in new pane; otherwise new terminal (non-blocking)
+if [[ -n "$TMUX" ]]; then
+  escaped_path=$(printf '%q' "$PROJECT_PATH")
+  tmux split-window -h "cd $escaped_path && openclaw"
+else
+  # Fallback: new terminal window (detached so it doesn't block)
+  escaped_path=$(printf '%q' "$PROJECT_PATH")
+  { osascript -e "tell application \"Terminal\" to do script \"cd $escaped_path && openclaw\"" 2>/dev/null || \
+    (cd "$PROJECT_PATH" && nohup openclaw >/dev/null 2>&1 &); } &
+  disown 2>/dev/null || true
+fi
+
+echo "Opened OpenClaw for $PROJECT"

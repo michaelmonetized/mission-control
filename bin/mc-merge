@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# mc-merge - Open PR in browser for review/merge
+# Usage: mc-merge <project-path>
+
+set -e
+
+# Validate arguments
+if [[ -z "${1:-}" ]]; then
+  echo "Usage: mc-merge <project-path>" >&2
+  exit 1
+fi
+
+if [[ ! -d "$1" ]]; then
+  echo "Error: Directory does not exist: $1" >&2
+  exit 1
+fi
+
+cd "$1"
+
+# Open PR in browser (non-blocking)
+if gh pr view --web 2>/dev/null; then
+  echo "Opened PR in browser"
+else
+  # No PR exists, offer to create one
+  echo "No PR found. Creating..."
+  gh pr create --web 2>/dev/null || echo "Could not create PR"
+fi

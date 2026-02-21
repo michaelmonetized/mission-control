@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# mc-push - Git push in background
+# Usage: mc-push <project-path>
+
+set -e
+
+# Validate arguments
+if [[ -z "${1:-}" ]]; then
+  echo "Usage: mc-push <project-path>" >&2
+  exit 1
+fi
+
+if [[ ! -d "$1" ]]; then
+  echo "Error: Directory does not exist: $1" >&2
+  exit 1
+fi
+
+cd "$1"
+PROJECT=$(basename "$1")
+LOG_DIR="$HOME/.hustlemc/logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/push-$PROJECT.log"
+
+# Push in background, log output, notify on completion
+(
+  push_output=$(git push 2>&1)
+  push_status=$?
+  echo "$push_output" > "$LOG_FILE"
+  
+  # Notify (macOS only, fails silently on other platforms)
+  if [[ $push_status -eq 0 ]]; then
+    osascript -e "display notification \"Push successful\" with title \"$PROJECT\"" 2>/dev/null || true
+  else
+    osascript -e "display notification \"Push failed - see logs\" with title \"$PROJECT\"" 2>/dev/null || true
+  fi
+) &
+
+disown
+echo "Pushing in background..."
+echo "Logs: $LOG_FILE"

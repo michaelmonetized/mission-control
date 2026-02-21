@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# mc-deploy - Vercel deploy in background
+# Usage: mc-deploy <project-path>
+
+set -e
+
+# Validate arguments
+if [[ -z "${1:-}" ]]; then
+  echo "Usage: mc-deploy <project-path>" >&2
+  exit 1
+fi
+
+if [[ ! -d "$1" ]]; then
+  echo "Error: Directory does not exist: $1" >&2
+  exit 1
+fi
+
+cd "$1"
+PROJECT=$(basename "$1")
+LOG_DIR="$HOME/.hustlemc/logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/deploy-$PROJECT.log"
+
+# Deploy in background, log output, notify on completion
+(
+  set -e
+  if vercel --prod > "$LOG_FILE" 2>&1; then
+    osascript -e "display notification \"Deploy successful\" with title \"$PROJECT\"" 2>/dev/null || true
+  else
+    osascript -e "display notification \"Deploy failed - see logs\" with title \"$PROJECT\"" 2>/dev/null || true
+  fi
+) &
+
+disown
+echo "Deploying in background..."
+echo "Logs: $LOG_FILE"
