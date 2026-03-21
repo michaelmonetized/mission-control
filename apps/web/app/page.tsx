@@ -1,52 +1,74 @@
-import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/nextjs";
+import { SignInButton, UserButton, auth } from "@clerk/nextjs";
 import Link from "next/link";
 
-export default function HomePage() {
+export default async function Home() {
+  const { userId } = await auth();
+
   return (
-    <div className="space-y-12">
-      <SignedIn>
-        <div className="flex items-center justify-between">
-          <h1 className="text-4xl font-bold">Welcome to Mission Control Cloud</h1>
-          <UserButton />
+    <main className="min-h-screen bg-gradient-to-b from-slate-950 to-slate-900">
+      <nav className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
+        <div className="text-2xl font-bold text-white">🚀 Mission Control</div>
+        <div>
+          {userId ? (
+            <>
+              <Link href="/dashboard" className="mr-4 text-slate-300 hover:text-white">
+                Dashboard
+              </Link>
+              <UserButton />
+            </>
+          ) : (
+            <SignInButton />
+          )}
         </div>
-        <p className="text-lg text-zinc-400">
-          Connect your GitHub repos, launch isolated VPS workspaces, and code with Claude.
+      </nav>
+
+      <section className="px-6 py-24 text-center max-w-3xl mx-auto">
+        <h1 className="text-5xl font-bold text-white mb-4">
+          Develop in the Cloud
+        </h1>
+        <p className="text-xl text-slate-300 mb-8">
+          Connect your GitHub repos, spin up isolated VMs, and run Claude Code in your browser.
         </p>
-        <Link
-          href="/dashboard"
-          className="inline-block rounded-lg bg-blue-600 px-6 py-3 font-medium text-white hover:bg-blue-700"
-        >
-          Go to Dashboard
-        </Link>
-      </SignedIn>
 
-      <SignedOut>
-        <div className="flex flex-col items-center justify-center space-y-8 py-20">
-          <div className="text-center">
-            <h1 className="mb-4 text-5xl font-bold">🚀 Mission Control Cloud</h1>
-            <p className="mb-8 text-xl text-zinc-400">
-              Unified project dashboard with isolated VPS workspaces. Code faster with Claude.
-            </p>
-          </div>
-
-          <div className="space-y-4 text-center">
-            <h2 className="text-2xl font-semibold">Features</h2>
-            <ul className="space-y-2 text-zinc-300">
-              <li>✅ Connect GitHub repositories (public & private)</li>
-              <li>✅ Launch isolated VPS workspaces per repo</li>
-              <li>✅ Integrated Claude Code IDE in the browser</li>
-              <li>✅ Pay-as-you-go compute billing</li>
-              <li>✅ Free tier: 100 minutes/month</li>
-            </ul>
-          </div>
-
+        {!userId ? (
           <SignInButton>
-            <button className="rounded-lg bg-blue-600 px-8 py-4 text-lg font-bold text-white hover:bg-blue-700">
-              Sign In with GitHub
+            <button className="px-8 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">
+              Get Started →
             </button>
           </SignInButton>
+        ) : (
+          <Link href="/dashboard">
+            <button className="px-8 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">
+              Open Dashboard →
+            </button>
+          </Link>
+        )}
+      </section>
+
+      <section className="grid grid-cols-3 gap-8 px-6 py-24 max-w-5xl mx-auto">
+        <div className="bg-slate-800 p-6 rounded-lg border border-slate-700">
+          <h3 className="text-lg font-bold text-white mb-2">🔗 Connect Repos</h3>
+          <p className="text-slate-400">
+            Link your GitHub repositories instantly with OAuth
+          </p>
         </div>
-      </SignedOut>
-    </div>
+        <div className="bg-slate-800 p-6 rounded-lg border border-slate-700">
+          <h3 className="text-lg font-bold text-white mb-2">⚡ Launch VMs</h3>
+          <p className="text-slate-400">
+            Spin up isolated workspaces in seconds
+          </p>
+        </div>
+        <div className="bg-slate-800 p-6 rounded-lg border border-slate-700">
+          <h3 className="text-lg font-bold text-white mb-2">💬 Claude Code</h3>
+          <p className="text-slate-400">
+            Run AI-powered development in the browser
+          </p>
+        </div>
+      </section>
+
+      <footer className="border-t border-slate-800 px-6 py-6 text-center text-slate-500 text-sm">
+        <p>Mission Control — Cloud Platform for Developers</p>
+      </footer>
+    </main>
   );
 }
