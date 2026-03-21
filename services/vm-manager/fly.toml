@@ -1,0 +1,43 @@
+# Fly.io Configuration for VM Manager
+
+app = "mission-control-vm-manager"
+primary_region = "ord"
+
+[build]
+dockerfile = "Dockerfile"
+
+[env]
+LOG_LEVEL = "info"
+
+[http_service]
+internal_port = 8080
+auto_stop_machines = true
+auto_start_machines = true
+min_machines_running = 1
+
+[[http_service.checks]]
+grace_period = "30s"
+interval = "30s"
+method = "GET"
+path = "/health"
+timeout = "5s"
+
+[[services]]
+protocol = "tcp"
+internal_port = 8080
+
+  [[services.ports]]
+  number = 80
+  handlers = ["http"]
+  force_https = true
+
+  [[services.ports]]
+  number = 443
+  handlers = ["tls", "http"]
+
+[env]
+FLY_APP = "mission-control-vms"
+
+[[statics]]
+guest_path = "/var/metrics"
+url_prefix = "/metrics"

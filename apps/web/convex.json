@@ -1,0 +1,7 @@
+{
+  "authInfoEndpoint": "/.auth/token",
+  "authIssuer": "https://clerk.com",
+  "authAudience": "convex",
+  "functions": "convex",
+  "prodUrl": "https://mission-control-prod.convex.cloud"
+}
