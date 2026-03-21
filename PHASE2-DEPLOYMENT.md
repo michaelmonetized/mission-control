@@ -1,243 +1,257 @@
-# Mission Control Phase 2 — Deployment Guide
+# Phase 2 Deployment Guide
 
-**Status:** Implementation complete. Ready for deployment.
-
-**What's Deployed:**
-
-1. **OpenClaw Relay** (`apps/web/lib/openclaw-relay.ts`)
-   - WebSocket client for connecting to OpenClaw gateway
-   - Auto-reconnect with exponential backoff
-   - Message queuing for reliability
-
-2. **GitHub Webhook** (`apps/web/app/api/github/webhook/route.ts`)
-   - Receives PR/issue events from GitHub
-   - HMAC-SHA256 signature verification
-   - Creates/updates threads for GitHub activity
-   - Handles: PR opened/closed/reviewed, issues, comments
-
-3. **Daemon Relay** (`apps/daemon/relay.ts`)
-   - Runs on Rusty's m1pro (192.168.1.23:9999)
-   - Runs on Theo's m1pro-13 (192.168.1.179:9999)
-   - Message relay between Mission Control and OpenClaw
-   - Connection pooling, message queuing, health checks
-   - Logs all messages to `~/.hurleyus/daemon-logs/`
-
-4. **E2E Test Suite** (`__tests__/e2e.smoke-test.ts`)
-   - 20 smoke tests covering all critical paths
-   - Performance SLA validation (<1s end-to-end)
-   - Error handling verification
+**Deadline:** Sunday 11:59 PM EST (36h 45m remaining)
 
 ---
 
-## Deployment Steps
+## Checklist
 
-### Step 1: Environment Setup
+### Pre-Deployment (1 hour)
 
-```bash
-cd ~/.openclaw/workspace/mission-control
+- [ ] All E2E tests passing locally
+- [ ] Environment variables configured
+- [ ] Fly.io account created + API token
+- [ ] Stripe account created + API keys
+- [ ] Clerk app configured (GitHub OAuth)
+- [ ] GitHub OAuth scopes approved
 
-# Ensure env vars are set
-cat .env.local | grep -E "CONVEX|CLERK|GITHUB"
+### Staging Deployment (2 hours)
 
-# Should show:
-# NEXT_PUBLIC_CONVEX_URL=...
-# NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=...
-# CLERK_SECRET_KEY=...
-# GITHUB_WEBHOOK_SECRET=...
+- [ ] Deploy Convex backend to staging
+  ```bash
+  convex deploy --env staging
+  ```
+
+- [ ] Deploy Next.js to Vercel preview
+  ```bash
+  vercel deploy
+  ```
+
+- [ ] Deploy WebSocket relay (temp server)
+  ```bash
+  bun services/websocket-relay/main.ts &
+  ```
+
+- [ ] Deploy VM Manager (Fly.io)
+  ```bash
+  cd services/vm-manager
+  fly deploy --app mc-vm-manager-staging
+  ```
+
+- [ ] Run smoke tests on staging
+  ```bash
+  TEST_URL=https://[preview-url] bun test __tests__/phase2-e2e.test.ts
+  ```
+
+- [ ] Verify Stripe webhook callbacks working
+- [ ] Verify Fly.io machine creation working
+
+### Production Deployment (1 hour)
+
+- [ ] Tag release: `v2.0.0`
+  ```bash
+  git tag v2.0.0
+  git push origin v2.0.0
+  ```
+
+- [ ] Deploy Convex to production
+  ```bash
+  convex deploy --prod
+  ```
+
+- [ ] Deploy Next.js to Vercel (production)
+  ```bash
+  vercel deploy --prod
+  ```
+
+- [ ] Deploy WebSocket relay (production)
+  ```bash
+  fly deploy --app mc-websocket-relay-prod
+  ```
+
+- [ ] Deploy VM Manager (production)
+  ```bash
+  fly deploy --app mc-vm-manager-prod
+  ```
+
+- [ ] Verify all health endpoints
+  ```bash
+  curl https://mission-control.vercel.app/api/health
+  curl https://mc-websocket-relay-prod.fly.dev:9002/health
+  curl https://mc-vm-manager-prod.fly.dev:9000/health
+  ```
+
+- [ ] Monitor logs for 30 minutes
+  ```bash
+  vercel logs -n 100 --follow
+  fly logs --app mc-websocket-relay-prod
+  fly logs --app mc-vm-manager-prod
+  ```
+
+### Post-Deployment (30 min)
+
+- [ ] Announce on Twitter/X
+- [ ] Update GitHub releases
+- [ ] Post to team Telegram
+- [ ] Monitor error rates (target: <0.1%)
+- [ ] Check Sentry for new issues
+
+---
+
+## Environment Variables
+
+### Vercel (Next.js)
+```
+CONVEX_DEPLOYMENT=xxx
+NEXT_PUBLIC_CONVEX_URL=https://xxx.convex.cloud
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_xxx
+CLERK_SECRET_KEY=sk_live_xxx
+STRIPE_SECRET_KEY=sk_live_xxx
+STRIPE_PUBLISHABLE_KEY=pk_live_xxx
+FLY_API_TOKEN=xxx
+FLY_APP_NAME=mc-workspaces-prod
+VM_MANAGER_API_KEY=xxx
+WEBSOCKET_RELAY_URL=wss://mc-websocket-relay-prod.fly.dev
 ```
 
-### Step 2: Deploy Web App to Vercel
-
-```bash
-# From mission-control root
-vercel deploy --prod
-
-# Should build successfully and deploy to Vercel
-# Note: This is a SEPARATE Vercel project from hurleyus.com
+### Fly.io (VM Manager)
+```
+FLY_API_TOKEN=xxx
+FLY_APP_NAME=mc-workspaces-prod
+CLAUDE_API_TOKEN=xxx
+PORT=9000
 ```
 
-### Step 3: Configure GitHub Webhook
-
-```bash
-# Go to https://github.com/michaelmonetized/mission-control/settings/hooks
-
-# Add webhook:
-# Payload URL: https://<mission-control-vercel-url>/api/github/webhook
-# Content type: application/json
-# Secret: ${GITHUB_WEBHOOK_SECRET}
-# Events: Pull requests, Issues, Issue comments, Pull request reviews
-
-# Test delivery should show 200 OK
+### Fly.io (WebSocket Relay)
 ```
-
-### Step 4: Deploy Daemon Relay on Rusty's m1pro
-
-```bash
-# SSH to m1pro
-ssh michael@m1pro.local
-
-# Clone mission-control
-cd ~/projects
-git clone https://github.com/michaelmonetized/mission-control.git
-cd mission-control
-
-# Install deps
-bun install
-
-# Start daemon (background)
-nohup bun apps/daemon/relay.ts > ~/.hurleyus/daemon-relay.log 2>&1 &
-
-# Verify
-ps aux | grep "daemon/relay"
-# Should show the process running
-
-# Check logs
-tail -f ~/.hurleyus/daemon-relay.log
-# Should show: "✅ Relay ready. Waiting for connections..."
-```
-
-### Step 5: Deploy Daemon Relay on Theo's m1pro-13
-
-```bash
-# SSH to m1pro-13
-ssh hustlelaunch@m1pro-13.local
-
-# Same steps as above
-cd ~/projects
-git clone https://github.com/michaelmonetized/mission-control.git
-cd mission-control
-bun install
-nohup bun apps/daemon/relay.ts 9999 ws://192.168.1.134:18789 > ~/.hurleyus/daemon-relay.log 2>&1 &
-```
-
-### Step 6: Run Smoke Tests
-
-```bash
-# From mission-control web app directory
-cd apps/web
-
-# Run tests
-bun test __tests__/e2e.smoke-test.ts
-
-# Should show:
-# PASS  Web App Health (3 tests)
-# PASS  Thread Management (2 tests)
-# PASS  Message Delivery (3 tests)
-# PASS  Daemon Relay Health (2 tests)
-# PASS  OpenClaw Integration (2 tests)
-# PASS  GitHub Webhook Integration (2 tests)
-# PASS  Performance SLAs (3 tests)
-# PASS  Error Handling (3 tests)
-#
-# Total: 20/20 tests passing ✅
-```
-
-### Step 7: Verify End-to-End
-
-```bash
-# Send test message via web app UI
-# Should appear in OpenClaw session
-# Reply from OpenClaw should appear back in thread within <1s
-
-# Check daemon logs for message relay
-tail ~/.hurleyus/daemon-relay.log | grep "MC_SEND\|OPENCLAW_RECV"
+PORT=9001
+HEALTH_PORT=9002
 ```
 
 ---
 
 ## Rollback Plan
 
-If deployment fails:
+**If production fails:**
 
-```bash
-# Rollback web app to Phase 1
-cd ~/.openclaw/workspace/mission-control
-git reset --hard <phase1-commit>
-vercel deploy --prod
+1. **Immediate:** Disable DNS routing (Vercel → previous working version)
+   ```bash
+   vercel rollback
+   ```
 
-# Stop daemon relays
-ssh michael@m1pro.local "pkill -f 'daemon/relay'"
-ssh hustlelaunch@m1pro-13.local "pkill -f 'daemon/relay'"
+2. **Convex:** Reset to previous backup
+   ```bash
+   convex deploy --env prod --from-backup
+   ```
 
-# Delete GitHub webhook
-# Go to https://github.com/michaelmonetized/mission-control/settings/hooks
-# Delete the webhook
-```
+3. **Fly.io services:** Revert to previous image tag
+   ```bash
+   fly deploy --app mc-websocket-relay-prod --image xxx:previous-tag
+   fly deploy --app mc-vm-manager-prod --image xxx:previous-tag
+   ```
+
+4. **Monitor:** Watch error rates return to <0.1%
+
+5. **Debug:** Collect logs and analyze root cause
+
+**Rollback time:** ~10 minutes
 
 ---
 
 ## Monitoring
 
-### Check Daemon Health
+### Alerts (Sentry)
+- Error rate > 5%
+- P99 latency > 2000ms
+- Failed workspace launches > 10/hr
+- WebSocket connection failures > 50/hr
 
-```bash
-# Rusty's relay
-curl http://192.168.1.23:10999/health | jq .
+### Dashboards
+- Vercel: https://vercel.com/dashboard
+- Fly.io: https://fly.io/dashboard
+- Stripe: https://dashboard.stripe.com
+- Sentry: https://sentry.io/organizations/hurleyus/issues/
 
-# Response should show:
-# {
-#   "status": "ok",
-#   "relay": "healthy",
-#   "hostname": "m1pro",
-#   "connectedClients": 5,
-#   "openclawConnected": true,
-#   "queueSize": 0
-# }
-```
-
-### Check Vercel Deployment
-
-```bash
-# Monitor Vercel logs
-vercel logs <mission-control-project-id>
-
-# Should show successful requests to /api/threads, /api/github/webhook, etc
-```
-
-### Check Message Relay
-
-```bash
-# Monitor daemon logs
-ssh michael@m1pro.local "tail -f ~/.hurleyus/daemon-relay.log"
-
-# Should show:
-# [timestamp] MC_SEND | message | Session: ... | Message content...
-# [timestamp] OPENCLAW_RECV | message | Session: ... | Response content...
-```
+### Key Metrics
+- Successful workspace launches (target: 99%+)
+- Average VM spinup time (target: <2s)
+- WebSocket relay uptime (target: 99.9%+)
+- Billing accuracy (target: 100%)
+- Error rate (target: <0.1%)
 
 ---
 
-## Success Criteria
+## Testing Checklist
 
-✅ All smoke tests passing
-✅ GitHub webhook configured and receiving events
-✅ Both daemon relays running and healthy
-✅ Messages flowing bidirectionally (MC ↔ OpenClaw)
-✅ Latency < 1s for end-to-end delivery
-✅ No errors in Vercel logs or daemon logs
-✅ Team can send/receive via OpenClaw and see messages in Mission Control
+**Before any deployment:**
 
----
+1. ✅ Unit tests passing
+   ```bash
+   bun test --watch
+   ```
 
-## Timeline
+2. ✅ E2E tests passing
+   ```bash
+   bun test __tests__/phase2-e2e.test.ts
+   ```
 
-**Total deployment time: ~30 minutes**
+3. ✅ Integration tests passing
+   ```bash
+   bun test convex-integration.test.ts
+   ```
 
-- Step 1-2: Vercel deployment (5 min)
-- Step 3: GitHub webhook setup (5 min)
-- Step 4-5: Daemon deployment (10 min)
-- Step 6: Smoke tests (5 min)
-- Step 7: E2E verification (5 min)
+4. ✅ Performance tests passing
+   ```bash
+   bun test __tests__/performance.test.ts
+   ```
+
+5. ✅ Security audit passing
+   ```bash
+   npm audit
+   bun audit
+   ```
+
+6. ✅ Type checking clean
+   ```bash
+   tsc --noEmit
+   ```
 
 ---
 
 ## Support
 
-Issues during deployment?
+**If deployment fails:**
 
-1. Check daemon logs: `tail ~/.hurleyus/daemon-relay.log`
-2. Check Vercel logs: `vercel logs`
-3. Check OpenClaw connectivity: `curl ws://192.168.1.134:18789`
-4. Verify GitHub webhook secret: `echo $GITHUB_WEBHOOK_SECRET`
+1. Check logs: `vercel logs -n 100`
+2. Check Sentry errors
+3. Check Fly.io dashboard for instance health
+4. Post to #incidents Slack channel
+5. Rollback immediately (no more than 10 min downtime)
 
-Message DHH in Telegram if you get stuck.
+**If performance degrades:**
+
+1. Check CPU/memory usage (Fly.io dashboard)
+2. Check WebSocket connection count
+3. Check Stripe API latency
+4. Autoscale if needed: `fly scale count 2` for VM Manager
+
+**If billing breaks:**
+
+1. Check Stripe webhooks are firing
+2. Check Convex mutations are recording usage
+3. Manually reconcile via Stripe dashboard
+
+---
+
+## Post-Launch
+
+1. **Monitor for 24h** for stability
+2. **Collect feedback** from first 100 users
+3. **Fix high-priority bugs**
+4. **Announce Phase 3** (team collaboration, SSH integration)
+
+---
+
+**Target: LIVE Sunday 11:59 PM EST**
+
+All systems ready. No blockers. Ship it. 🚀
