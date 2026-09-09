@@ -63,123 +63,44 @@ Each row:
 - Building: `󱫟`
 - Failed: `⨻`
 
-## Tech Stack
+## Tech Stack (HEAD)
 
-- **Runtime:** Bun
-- **TUI Framework:** Ink (React for CLI)
-- **State:** Zustand
+- **Language:** Go (see `go.mod`)
+- **TUI Framework:** Charm Bubble Tea + Bubbles + Lip Gloss
 - **Icons:** Nerd Fonts (required)
-- **Cache:** ~/.hustlemc/
+- **Cache / state:** local under `~/.hustlemc/` (as implemented)
+- **Not at HEAD:** Bun, Ink (React for CLI), Zustand — those were an earlier plan fiction
 
-## File Structure
+## File Structure (HEAD)
 
 ```
 mission-control/
-├── src/
-│   ├── index.tsx           # Entry point
-│   ├── app.tsx             # Main app component
-│   ├── components/
-│   │   ├── StatusTop.tsx   # Top status line
-│   │   ├── StatusBottom.tsx
-│   │   ├── SearchBar.tsx
-│   │   ├── ProjectList.tsx
-│   │   ├── ProjectRow.tsx
-│   │   ├── ChatBar.tsx     # OpenClaw integration
-│   │   └── DetailView.tsx  # Single project view
-│   ├── hooks/
-│   │   ├── useProjects.ts
-│   │   ├── useVercel.ts
-│   │   ├── useGit.ts
-│   │   └── useGitHub.ts
-│   ├── lib/
-│   │   ├── discover.ts     # Project discovery
-│   │   ├── cache.ts        # ~/.hustlemc/ management
-│   │   ├── caddy.ts        # Caddy integration
-│   │   └── openclaw.ts     # Gateway client
-│   └── store/
-│       └── index.ts        # Zustand store
-├── package.json
-├── tsconfig.json
+├── cmd/mc/main.go          # TUI entrypoint (`go build -o mc-tui ./cmd/mc`)
+├── pkg/
+│   ├── discover/           # Project discovery
+│   ├── openclaw/           # Gateway client
+│   └── ui/                 # Bubble Tea UI
+├── apps/
+│   ├── daemon/             # Companion daemon work
+│   └── web/                # Web surface (scaffold)
+├── services/               # Supporting services
+├── go.mod / go.sum
 ├── README.md
 ├── PLAN.md
-├── REQUIREMENTS.md
-├── STANDARDS.md
-└── TODO.md
+└── PHASE*.md               # Historical phase writeups (docs)
 ```
 
-## Phases
+## Phases (honesty)
 
-### Phase 1: Foundation
-- [ ] Project scaffold (Bun + Ink + TypeScript)
-- [ ] Basic layout with all 5 zones
-- [ ] Vim keybindings (hjkl, gg, G, /search)
-- [ ] Project discovery (find .vercel, .xcodeproj, package.json)
+### Phase 1: Foundation — largely landed as Go TUI
+- [x] Go + Bubble Tea project scaffold (`cmd/mc`, `pkg/ui`)
+- [x] Basic layout zones (status / search / list / chat / bottom)
+- [x] Project discovery hooks
+- [ ] Full vim keybinding polish (verify vs HEAD before claiming done)
 
-### Phase 2: Status Integration
-- [ ] Git status crawling
-- [ ] Vercel status via `vl`
-- [ ] GitHub issues/PRs via `gh`
-- [ ] Swift build status
+### Phase 2+: Status integrations / daemon / web
+See `PHASE2-*.md` … `PHASE7-*.md` for historical writeups. Treat checkbox claims in those docs as **aspirational** unless verified against `pkg/` and tests.
 
-### Phase 3: Actions
-- [ ] Play/Pause (bun dev + Caddy hostname)
-- [ ] Open in browser
-- [ ] Edit docs (nvim README, TODO, PLAN, etc.)
-- [ ] OpenClaw TUI launch
+Open work remains around richer Vercel/Swift/GitHub live status, daemon deployment, and production hardening — do not reintroduce an Ink/React/Zustand tree in PLAN.
 
-### Phase 4: OpenClaw Chat
-- [ ] Gateway client integration
-- [ ] Context-aware commands (project cwd)
-- [ ] Response display
-
-### Phase 5: Polish
-- [ ] p10k-style transitions
-- [ ] Loading states
-- [ ] Error handling
-- [ ] Performance optimization
-
-## Data Flow
-
-```
-Discovery → Cache → UI
-    ↓         ↓
-  .hustlemc/  Zustand Store
-  projects.json   ↓
-                Render
-```
-
-## Caching Strategy
-
-- **~/.hustlemc/projects.json** — Project metadata
-- **~/.hustlemc/status.json** — Cached statuses (TTL: 30s)
-- **${project}/.hustlemc/project.env** — Per-project config
-- **${project}/.hustlemc/CONTEXT.md** — AI context
-
-## Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `j/k` | Navigate down/up |
-| `h/l` | Collapse/expand or prev/next pane |
-| `gg` | Jump to top |
-| `G` | Jump to bottom |
-| `{n}j` | Move down n rows |
-| `/` | Focus search |
-| `Enter` | Open project detail |
-| `o` | Open in browser / build+run |
-| `r` | Edit README |
-| `R` | Edit ROADMAP |
-| `p` | Edit PLAN |
-| `t` | Edit TODO |
-| `c` | OpenClaw TUI (project cwd) |
-| `C` | OpenClaw TUI (parent folder) |
-| `q` | Quit / back |
-| `Esc` | Clear search / back |
-
-## Success Criteria
-
-1. Zero config — auto-discovers everything
-2. Instant startup (<500ms)
-3. Real-time status updates
-4. Seamless OpenClaw integration
-5. Works on Nerd Font terminals only (no fallback)
+*PLAN parity sync: 2026-09-08 — replaced Ink/React/Zustand fiction with Go + Bubble Tea HEAD.*
